@@ -1,6 +1,6 @@
 import { isTauri } from './platform'
 import { readRuntimeEnv } from './runtimeEnv'
-import { getServerConfig, getServerToken, isServerManagedKey, SERVER_PROXY_PREFIX } from './serverMode'
+import { getServerConfig, getServerToken, SERVER_PROXY_PREFIX } from './serverMode'
 
 export interface DevProxyConfig {
   enabled: boolean

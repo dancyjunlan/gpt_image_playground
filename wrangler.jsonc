@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "gpt-image-playground",
+  "account_id": "7eafdf964fb0c0c6eff1a8796cfab5c3",
   "main": "worker/index.ts",
   "compatibility_date": "2026-05-07",
   "assets": {
@@ -12,6 +13,20 @@
   "observability": {
     "enabled": true
   },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "IMAGE_JOBS",
+        "class_name": "ImageJob"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ImageJob"]
+    }
+  ],
   "vars": {
     // 上游 OpenAI 兼容接口的基础地址，例如 https://api.example.com/v1
     "UPSTREAM_BASE_URL": "",
@@ -22,6 +37,8 @@
     // 访问口令，留空表示对所有人开放
     "ACCESS_PASSWORD": "",
     // 单次上游请求的超时（毫秒）
-    "PROXY_TIMEOUT_MS": "600000"
+    "PROXY_TIMEOUT_MS": "600000",
+    // 后台任务失败后的最大尝试次数（1-5）
+    "JOB_MAX_ATTEMPTS": "3"
   }
 }

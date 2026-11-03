@@ -11,17 +11,20 @@
 
 interface Env {
   ASSETS: { fetch: (request: Request) => Promise<Response> }
+  IMAGE_JOBS: DurableObjectNamespace
   UPSTREAM_BASE_URL: string
   UPSTREAM_API_KEY?: string
   UPSTREAM_AUTH_HEADER?: string
   DEFAULT_IMAGE_MODEL?: string
   ACCESS_PASSWORD?: string
   PROXY_TIMEOUT_MS?: string
+  JOB_MAX_ATTEMPTS?: string
 }
 
 type UpstreamAuth = 'bearer' | 'apikey' | 'basic' | 'none'
 
 const PROXY_PREFIX = '/api/proxy/'
+const JOBS_PREFIX = '/api/jobs'
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 const CLOCK_SKEW_SECONDS = 60
 const SESSION_COOKIE = 'gip_session'
@@ -75,6 +78,8 @@ function getPublicConfig(env: Env) {
     passwordRequired: serverMode && Boolean(readEnv(env.ACCESS_PASSWORD)),
     apiProxyAvailable: serverMode,
     apiProxyLocked: serverMode,
+    // 后台任务模式下浏览器不保持长连接，由 Durable Object 跑完再取结果
+    backgroundJobs: serverMode && Boolean(env.IMAGE_JOBS),
     model: readEnv(env.DEFAULT_IMAGE_MODEL) || undefined,
   }
 }
@@ -242,6 +247,46 @@ async function handleSession(request: Request, env: Env) {
   })
 }
 
+/** 创建后台任务：请求体交给 Durable Object 保存，立即返回任务 ID */
+async function handleCreateJob(request: Request, env: Env) {
+  if (request.method !== 'POST') return json({ error: { message: '请使用 POST' } }, 405)
+
+  const url = new URL(request.url)
+  const upstream = url.searchParams.get('upstream') ?? 'images/generations'
+  if (!/^[\w./-]+$/.test(upstream)) return json({ error: { message: '上游路径不合法' } }, 400)
+
+  const id = crypto.randomUUID()
+  const stub = env.IMAGE_JOBS.get(env.IMAGE_JOBS.idFromName(id))
+  const target = new URL(`https://job.internal/?action=start&job=${encodeURIComponent(id)}&upstream=${encodeURIComponent(upstream)}&origin=${encodeURIComponent(url.origin)}`)
+
+  const init: RequestInit & { duplex?: string } = {
+    method: 'POST',
+    headers: {
+      'X-Upstream-Content-Type': request.headers.get('Content-Type') || 'application/json',
+      'X-Upstream-Accept': request.headers.get('Accept') || 'application/json',
+    },
+    body: request.body,
+    duplex: 'half',
+  }
+  const started = await stub.fetch(target.toString(), init as RequestInit)
+  if (!started.ok) return json({ error: { message: '创建后台任务失败' } }, 502)
+  return json({ id, status: 'pending' }, 202)
+}
+
+async function handleJob(request: Request, env: Env, jobId: string) {
+  const url = new URL(request.url)
+  const action = url.pathname.endsWith('/image') ? 'image' : 'status'
+  const stub = env.IMAGE_JOBS.get(env.IMAGE_JOBS.idFromName(jobId))
+  const target = `https://job.internal/?action=${action}${url.search ? `&${url.search.slice(1)}` : ''}`
+  const upstream = await stub.fetch(target)
+  // 图片响应直接透传，状态响应补上缓存控制
+  if (action === 'image') return upstream
+  return new Response(upstream.body, {
+    status: upstream.status,
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
+  })
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
@@ -252,6 +297,18 @@ export default {
     }
 
     if (url.pathname === '/api/session') return handleSession(request, env)
+
+    if (url.pathname === JOBS_PREFIX || url.pathname.startsWith(`${JOBS_PREFIX}/`)) {
+      if (!(await verifySession(request, env))) {
+        return json({ error: { message: '访问口令已失效，请刷新页面重新验证' } }, 401)
+      }
+      if (url.pathname === JOBS_PREFIX || url.pathname === `${JOBS_PREFIX}/`) return handleCreateJob(request, env)
+
+      const rest = url.pathname.slice(JOBS_PREFIX.length + 1)
+      const [jobId] = rest.split('/').filter(Boolean)
+      if (!jobId) return json({ error: { message: '缺少任务 ID' } }, 400)
+      return handleJob(request, env, jobId)
+    }
 
     if (url.pathname.startsWith(PROXY_PREFIX)) {
       if (!(await verifySession(request, env))) {
@@ -267,3 +324,5 @@ export default {
     return env.ASSETS.fetch(request)
   },
 }
+
+export { ImageJob } from './jobs'

@@ -1,7 +1,8 @@
 import { DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type CustomProviderDefinition, type CustomProviderPollMapping, type CustomProviderResultMapping, type CustomProviderSubmitMapping, type ImageApiResponse, type ImageResponseItem, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
 import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob } from './canvasImage'
+import { blobToDataUrl } from './dataUrl'
 import { buildApiUrl, createServerModeHeaders, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
-import { isServerMode } from './serverMode'
+import { isBackgroundJobsEnabled, isServerMode } from './serverMode'
 import {
   assertImageInputPayloadSize,
   assertMaskEditFileSize,
@@ -439,7 +440,128 @@ async function parseResponsesApiStreamResponse(
   }
 }
 
+const BACKGROUND_JOB_POLL_MS = 3000
+
+/**
+ * 服务端后台任务：提交后由 Durable Object 执行，前端只轮询状态。
+ * 浏览器刷新、切后台或断网都不会中断生成，恢复后继续拿结果。
+ */
+async function callServerBackgroundJob(opts: CallApiOptions, profile: ApiProfile): Promise<CallApiResult> {
+  const { prompt: originalPrompt, params, inputImageDataUrls } = opts
+  const sizePrompt = profile.codexCli && !opts.skipCodexCliSizePrompt
+    ? prependCodexCliSizePrompt(originalPrompt, params.size)
+    : originalPrompt
+  const prompt = profile.codexCli && !opts.settings.allowPromptRewrite
+    ? `${PROMPT_REWRITE_GUARD_PREFIX}\n${sizePrompt}`
+    : sizePrompt
+  const isEdit = inputImageDataUrls.length > 0
+  const mime = MIME_MAP[params.output_format] || 'image/png'
+  const headers = createRequestHeaders(profile)
+
+  const body: Record<string, unknown> = {
+    model: profile.model,
+    prompt,
+    output_format: params.output_format,
+    moderation: params.moderation,
+  }
+  if (opts.nativeTransparentBackground) body.background = 'transparent'
+  if (!profile.codexCli) {
+    body.size = params.size
+    body.quality = params.quality
+  }
+  if (params.output_format !== 'png' && params.output_compression != null) {
+    body.output_compression = params.output_compression
+  }
+  if (params.n > 1) body.n = params.n
+  if (profile.responseFormatB64Json) body.response_format = 'b64_json'
+
+  let payload: BodyInit
+  if (isEdit) {
+    const formData = new FormData()
+    formData.append('model', profile.model)
+    formData.append('prompt', prompt)
+    if (!profile.codexCli) formData.append('size', params.size)
+    formData.append('output_format', params.output_format)
+    formData.append('moderation', params.moderation)
+    if (opts.nativeTransparentBackground) formData.append('background', 'transparent')
+    if (!profile.codexCli) formData.append('quality', params.quality)
+    if (params.output_format !== 'png' && params.output_compression != null) {
+      formData.append('output_compression', String(params.output_compression))
+    }
+    if (params.n > 1) formData.append('n', String(params.n))
+    if (profile.responseFormatB64Json) formData.append('response_format', 'b64_json')
+
+    const blobs: Blob[] = []
+    for (let i = 0; i < inputImageDataUrls.length; i += 1) {
+      const blob = opts.maskDataUrl && i === 0
+        ? await imageDataUrlToPngBlob(inputImageDataUrls[i])
+        : await dataUrlToBlob(inputImageDataUrls[i])
+      blobs.push(blob)
+    }
+    if (opts.maskDataUrl) {
+      assertMaskEditFileSize('遮罩主图文件', blobs[0]?.size ?? 0)
+      const maskBlob = await maskDataUrlToPngBlob(opts.maskDataUrl)
+      assertMaskEditFileSize('遮罩文件', maskBlob.size)
+      formData.append('mask', maskBlob, 'mask.png')
+    }
+    for (let i = 0; i < blobs.length; i += 1) {
+      const blob = blobs[i]
+      formData.append('image[]', blob, `input-${i + 1}.${blob.type.split('/')[1] || 'png'}`)
+    }
+    payload = formData
+  } else {
+    payload = JSON.stringify(body)
+    headers['Content-Type'] = 'application/json'
+  }
+
+  const upstreamPath = isEdit ? 'images/edits' : 'images/generations'
+  const submit = await apiFetch(`/api/jobs?upstream=${encodeURIComponent(upstreamPath)}`, {
+    method: 'POST',
+    headers: { ...headers, 'X-Upstream-Accept': 'application/json' },
+    body: payload,
+    cache: 'no-store',
+  })
+  if (!submit.ok) throw new Error(await getApiErrorMessage(submit))
+
+  const created = await submit.json() as { id?: string }
+  if (!created.id) throw new Error('服务端没有返回任务 ID')
+
+  const deadline = Date.now() + profile.timeout * 1000
+  let images: string[] = []
+  while (true) {
+    if (Date.now() > deadline) throw createRequestTimeoutError(profile.timeout)
+    await new Promise((resolve) => setTimeout(resolve, BACKGROUND_JOB_POLL_MS))
+
+    const response = await apiFetch(`/api/jobs/${created.id}`, {
+      cache: 'no-store',
+      headers: createRequestHeaders(profile),
+    })
+    if (!response.ok) throw new Error(await getApiErrorMessage(response))
+    const job = await response.json() as { status?: string; error?: { message?: string }; result?: unknown }
+
+    if (job.status === 'failed') throw new Error(job.error?.message || '后台任务失败')
+    if (job.status !== 'completed') continue
+
+    // 服务端返回的是本站图片地址，按 b64 取回以复用现有的图片处理流程
+    const data = (job.result as { data?: Array<{ url?: string }> } | undefined)?.data ?? []
+    for (const item of data) {
+      if (!item.url) continue
+      const imageResponse = await apiFetch(item.url, { cache: 'no-store', headers: createRequestHeaders(profile) })
+      if (!imageResponse.ok) throw new Error(await getApiErrorMessage(imageResponse))
+      const blob = await imageResponse.blob()
+      images.push(await blobToDataUrl(blob, mime))
+    }
+    break
+  }
+
+  if (!images.length) throw new Error('后台任务完成但没有返回图片')
+  return { images, actualParams: mergeActualParams({}) }
+}
+
 export async function callOpenAICompatibleImageApi(opts: CallApiOptions, profile: ApiProfile, customProvider?: CustomProviderDefinition | null): Promise<CallApiResult> {
+  // 部署端启用了后台任务时统一走「提交 → 轮询」，浏览器不再保持长连接
+  if (!customProvider && isBackgroundJobsEnabled()) return callServerBackgroundJob(opts, profile)
+
   if (customProvider) {
     const n = opts.params.n > 0 ? opts.params.n : 1
     const submitMapping = opts.inputImageDataUrls.length > 0 && customProvider.editSubmit

@@ -9,6 +9,8 @@ export interface ServerConfig {
   passwordRequired: boolean
   apiProxyAvailable: boolean
   apiProxyLocked: boolean
+  /** 部署端启用了后台任务：长耗时生成不占用浏览器连接，失败还会自动重试 */
+  backgroundJobs: boolean
   /** 部署端建议的默认模型 ID，留空时前端使用内置默认值 */
   model?: string
 }
@@ -55,6 +57,7 @@ function normalizeServerConfig(input: unknown): ServerConfig | null {
     passwordRequired: record.passwordRequired === true,
     apiProxyAvailable: record.apiProxyAvailable !== false,
     apiProxyLocked: record.apiProxyLocked !== false,
+    backgroundJobs: record.backgroundJobs === true,
     ...(typeof record.model === 'string' && record.model.trim() ? { model: record.model.trim() } : {}),
   }
 }
@@ -134,6 +137,11 @@ export async function isAccessPasswordSatisfied() {
   } catch {
     return false
   }
+}
+
+/** 部署端启用了后台任务时，客户端改用「提交任务 → 轮询」的异步协议 */
+export function isBackgroundJobsEnabled() {
+  return Boolean(cached?.backgroundJobs)
 }
 
 /**

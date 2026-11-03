@@ -282,11 +282,12 @@ VITE_DEFAULT_API_URL=https://api.openai.com/v1
 
 **服务端模式**
 
-本仓库的 Worker（[`worker/index.ts`](worker/index.ts)）承担三件事：
+本仓库的 Worker（[`worker/index.ts`](worker/index.ts)）承担这些事：
 
 - `GET /api/server-config`：下发运行期配置（不含任何密钥），前端据此进入服务端模式。
 - `POST /api/session`：校验访问口令，成功后下发 HttpOnly 的签名令牌 Cookie。
-- `ALL /api/proxy/*`：转发到上游接口，并在服务端注入上游 API Key。
+- `POST /api/jobs`、`GET /api/jobs/:id`：提交后台生图任务并轮询结果。浏览器不保持长连接，手机切后台或刷新页面也不会中断生成。
+- `ALL /api/proxy/*`：短请求仍可直接转发到上游，并在服务端注入上游 API Key。
 
 因此**上游 API 地址和 Key 只存在于 Worker 环境变量里**，前端代码、浏览器存储和网络请求中都拿不到真实密钥；用户打开页面时也不需要填写 API 地址与 Key。
 
@@ -306,22 +307,28 @@ npx wrangler secret put UPSTREAM_API_KEY      # 上游 API Key
 | `DEFAULT_IMAGE_MODEL` | 前端默认模型 ID，留空时使用应用内置默认值 |
 | `ACCESS_PASSWORD` | 访问口令，留空表示对所有人开放；设置后页面会先要求验证 |
 | `PROXY_TIMEOUT_MS` | 单次上游请求超时（毫秒），默认 `600000` |
-| `ALLOW_BROWSER_DIRECT` | 是否允许用户绕过服务端直连自己的 API，默认 `false` |
+| `JOB_MAX_ATTEMPTS` | 后台任务失败后的最大尝试次数，默认 `3` |
 
 **部署**
 
 ```bash
 npx wrangler login
+npx wrangler secret put UPSTREAM_API_KEY
 npm run deploy:cf
 ```
 
 `deploy:cf` 会先执行 `npm run build`，再通过 `wrangler deploy` 上传 `dist/` 并部署 Worker。
 
+推送到 `main` 后，GitHub Actions 工作流 [`.github/workflows/deploy-cloudflare.yml`](.github/workflows/deploy-cloudflare.yml) 会自动部署。仓库 Secrets 需要：
+
+- `CLOUDFLARE_API_TOKEN`：Cloudflare API Token，权限包含 `Account.Workers Scripts Edit` 与 `Account.Account Settings Read`
+- `CLOUDFLARE_ACCOUNT_ID`：Cloudflare 账号 ID
+
 **说明**
 
 - 服务端模式下 API 配置由部署端提供并锁定，用户只能选模型，不能改地址和 Key。
-- 生图耗时可能超过 100 秒，上游若同样在 Cloudflare 之后可能触发 524；可在设置里开启流式或改用异步接口的自定义服务商。
-- Worker 转发为流式透传，图片以 `b64_json` 或 SSE 分片返回时都不落盘，也不额外占用内存。
+- 文生图和图生图都会走后台任务：提交后立即返回任务 ID，Durable Object 在后台调用上游，失败会按 5s / 20s / 60s 退避重试。
+- 上游若同样在 Cloudflare 之后仍可能触发 524；后台任务会自动重试，浏览器侧不会一直占着一条长连接。
 
 </details>
 
