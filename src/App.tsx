@@ -4,6 +4,7 @@ import { clearUrlSettingParams, hasUrlSettingParams } from './lib/urlSettings'
 import { createDefaultOpenAIProfile, hasDefaultPresetConfig, isAgentTextApiProfile, normalizeSettings } from './lib/apiProfiles'
 import { getCustomProviderConfigUrl, hasEmbeddedDefaultConfig, loadCustomProviderSettingsFromUrl, loadEmbeddedDefaultConfig } from './lib/customProviderConfigUrl'
 import { getDefaultPresetProfileId, getPresetProfileIds, isPresetConfigOnlyEnabled, setPresetConfig } from './lib/presetConfig'
+import { createServerPresetConfig, getServerConfig, isServerMode } from './lib/serverMode'
 import { useDockerApiUrlMigrationNotice } from './hooks/useDockerApiUrlMigrationNotice'
 import { useAppFonts } from './hooks/useAppFonts'
 import { useColorMode } from './hooks/useColorMode'
@@ -137,14 +138,17 @@ export default function App() {
 
     void initStore()
       .then(async () => {
-        const importedSettings = embeddedDefaultConfig || customProviderConfigUrl
-          ? await loadDefaultConfig()
-          : hasDefaultPresetConfig()
-            ? {
-                customProviders: [],
-                profiles: [{ ...createDefaultOpenAIProfile(), isDefault: true }],
-              }
-            : null
+        // 服务端模式下地址与密钥都在部署端，配置列表由 Worker 统一下发
+        const importedSettings = isServerMode()
+          ? createServerPresetConfig(getServerConfig()?.model)
+          : embeddedDefaultConfig || customProviderConfigUrl
+            ? await loadDefaultConfig()
+            : hasDefaultPresetConfig()
+              ? {
+                  customProviders: [],
+                  profiles: [{ ...createDefaultOpenAIProfile(), isDefault: true }],
+                }
+              : null
         setPresetConfig(importedSettings)
 
         const state = useStore.getState()

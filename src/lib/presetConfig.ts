@@ -1,6 +1,7 @@
 import type { ApiProfile, AppSettings, CustomProviderDefinition, PresetAgentConfig, PresetConfig } from '../types'
 import { getPresetAgentSettings, normalizeSettings } from './apiProfiles'
 import { readRuntimeEnv } from './runtimeEnv'
+import { isServerMode } from './serverMode'
 
 const RAW_SHOW_PRESET_CONFIG_ONLY = readRuntimeEnv(import.meta.env.VITE_SHOW_PRESET_CONFIG_ONLY)
 const SHOW_PRESET_CONFIG_ONLY = (RAW_SHOW_PRESET_CONFIG_ONLY || readRuntimeEnv(import.meta.env.VITE_SHOW_DEFAULT_CONFIG_ONLY)) === 'true'
@@ -66,11 +67,12 @@ export function isPresetProvider(id: string) {
 }
 
 export function isPresetConfigOnlyEnabled() {
-  return SHOW_PRESET_CONFIG_ONLY && presetProfiles.length > 0
+  // 服务端模式下配置列表完全由部署端提供，等同于只允许使用预置配置
+  return presetProfiles.length > 0 && (SHOW_PRESET_CONFIG_ONLY || isServerMode())
 }
 
 export function isPresetConfigParamsLocked() {
-  return LOCK_PRESET_CONFIG_PARAMS && presetProfiles.length > 0
+  return presetProfiles.length > 0 && (LOCK_PRESET_CONFIG_PARAMS || isServerMode())
 }
 
 export function isPresetConfigDeletionPrevented() {

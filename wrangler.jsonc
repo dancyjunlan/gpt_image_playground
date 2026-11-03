@@ -1,9 +1,27 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "gpt-image-playground",
+  "main": "worker/index.ts",
   "compatibility_date": "2026-05-07",
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    // 上游 OpenAI 兼容接口的基础地址，例如 https://api.example.com/v1
+    "UPSTREAM_BASE_URL": "",
+    // 上游鉴权头：bearer（默认）、apikey（X-Api-Key）、basic、none
+    "UPSTREAM_AUTH_HEADER": "bearer",
+    // 前端默认模型 ID，留空时使用应用内置默认值
+    "DEFAULT_IMAGE_MODEL": "",
+    // 访问口令，留空表示对所有人开放
+    "ACCESS_PASSWORD": "",
+    // 单次上游请求的超时（毫秒）
+    "PROXY_TIMEOUT_MS": "600000"
   }
 }

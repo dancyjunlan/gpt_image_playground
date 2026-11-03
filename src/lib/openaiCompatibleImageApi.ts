@@ -1,6 +1,7 @@
 import { DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type CustomProviderDefinition, type CustomProviderPollMapping, type CustomProviderResultMapping, type CustomProviderSubmitMapping, type ImageApiResponse, type ImageResponseItem, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
 import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob } from './canvasImage'
-import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
+import { buildApiUrl, createServerModeHeaders, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
+import { isServerMode } from './serverMode'
 import {
   assertImageInputPayloadSize,
   assertMaskEditFileSize,
@@ -90,9 +91,11 @@ function normalizeImageApiPayload(value: unknown): ImageApiResponse {
 }
 
 function createRequestHeaders(profile: ApiProfile): Record<string, string> {
-  return {
+  const headers = {
     Authorization: `Bearer ${profile.apiKey}`,
   }
+  // 服务端模式下上游密钥由 Worker 注入，浏览器不再发送 Authorization
+  return isServerMode() ? createServerModeHeaders(headers) : headers
 }
 
 function isRecordValue(value: unknown): value is Record<string, unknown> {

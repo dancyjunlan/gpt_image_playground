@@ -1,5 +1,6 @@
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
-import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
+import { buildApiUrl, createServerModeHeaders, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
+import { isServerMode } from './serverMode'
 import { appendStreamingFormatHint, createRequestTimeoutError, getApiErrorMessage, getResponsesImageResultBase64, maybeAppendImageToolDroppedHint, maybeAppendStreamingHint, MIME_MAP, normalizeBase64Image, pickActualParams, PROMPT_REWRITE_GUARD_PREFIX } from './imageApiShared'
 import { getImageGenerationModel } from './imageModels'
 import { apiFetch } from './platform'
@@ -102,10 +103,12 @@ const AGENT_TITLE_INSTRUCTIONS = [
 const AGENT_TITLE_MAX_LENGTH = 28
 
 function createHeaders(profile: ApiProfile): Record<string, string> {
-  return {
+  const headers = {
     Authorization: `Bearer ${profile.apiKey}`,
     'Content-Type': 'application/json',
   }
+  // 服务端模式下上游密钥由 Worker 注入，浏览器不再发送 Authorization
+  return isServerMode() ? createServerModeHeaders(headers) : headers
 }
 
 function createImageTool(params: TaskParams, profile: ApiProfile, maskDataUrl?: string): Record<string, unknown> {

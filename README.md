@@ -276,17 +276,37 @@ VITE_DEFAULT_API_URL=https://api.openai.com/v1
 </details>
 
 <details>
-<summary><strong>☁️ 方式四：Cloudflare Workers 部署</strong></summary>
+<summary><strong>☁️ 方式四：Cloudflare Workers 部署（服务端模式）</strong></summary>
 
-通过内置的 Wrangler 配置，将构建产物作为静态资源部署到 Cloudflare Workers。
+通过内置的 Wrangler 配置，将构建产物作为静态资源部署到 Cloudflare Workers，同时由同一个 Worker 提供 `/api/*` 接口。
 
-**环境变量（可选）**
+**服务端模式**
 
-Cloudflare Workers 不会在部署后改写静态文件，变量必须在构建前设置（如写入项目根目录的 `.env.local`）：
+本仓库的 Worker（[`worker/index.ts`](worker/index.ts)）承担三件事：
 
-```dotenv
-VITE_DEFAULT_API_URL=https://api.openai.com/v1
+- `GET /api/server-config`：下发运行期配置（不含任何密钥），前端据此进入服务端模式。
+- `POST /api/session`：校验访问口令，成功后下发 HttpOnly 的签名令牌 Cookie。
+- `ALL /api/proxy/*`：转发到上游接口，并在服务端注入上游 API Key。
+
+因此**上游 API 地址和 Key 只存在于 Worker 环境变量里**，前端代码、浏览器存储和网络请求中都拿不到真实密钥；用户打开页面时也不需要填写 API 地址与 Key。
+
+**必填变量**
+
+```bash
+npx wrangler secret put UPSTREAM_API_KEY      # 上游 API Key
 ```
+
+在 `wrangler.jsonc` 的 `vars` 中设置（或改用 `wrangler secret put`，更推荐用于密钥）：
+
+| 变量 | 说明 |
+|------|------|
+| `UPSTREAM_BASE_URL` | 上游 OpenAI 兼容接口的基础地址，如 `https://api.example.com/v1` |
+| `UPSTREAM_API_KEY` | 上游 API Key，建议用 `wrangler secret put` 写入 |
+| `UPSTREAM_AUTH_HEADER` | 上游鉴权头：`bearer`（默认）、`apikey`（`X-Api-Key`）、`basic`、`none` |
+| `DEFAULT_IMAGE_MODEL` | 前端默认模型 ID，留空时使用应用内置默认值 |
+| `ACCESS_PASSWORD` | 访问口令，留空表示对所有人开放；设置后页面会先要求验证 |
+| `PROXY_TIMEOUT_MS` | 单次上游请求超时（毫秒），默认 `600000` |
+| `ALLOW_BROWSER_DIRECT` | 是否允许用户绕过服务端直连自己的 API，默认 `false` |
 
 **部署**
 
@@ -295,7 +315,13 @@ npx wrangler login
 npm run deploy:cf
 ```
 
-`deploy:cf` 会先执行 `npm run build`，再通过 `wrangler deploy` 上传 `dist/` 目录。
+`deploy:cf` 会先执行 `npm run build`，再通过 `wrangler deploy` 上传 `dist/` 并部署 Worker。
+
+**说明**
+
+- 服务端模式下 API 配置由部署端提供并锁定，用户只能选模型，不能改地址和 Key。
+- 生图耗时可能超过 100 秒，上游若同样在 Cloudflare 之后可能触发 524；可在设置里开启流式或改用异步接口的自定义服务商。
+- Worker 转发为流式透传，图片以 `b64_json` 或 SSE 分片返回时都不落盘，也不额外占用内存。
 
 </details>
 

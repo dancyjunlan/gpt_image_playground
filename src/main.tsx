@@ -1,11 +1,12 @@
 import 'core-js/actual/array/at'
-import { StrictMode } from 'react'
+import { StrictMode, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import 'streamdown/styles.css'
 import 'katex/dist/katex.min.css'
 import './index.css'
 import { getProxySetting } from './lib/networkProxy'
 import { installBrowserBehaviorGuards, installExternalLinkHandler, isTauri, TITLEBAR_HEIGHT } from './lib/platform'
+import { isAccessPasswordSatisfied, loadServerConfig } from './lib/serverMode'
 import { installTauriLog } from './lib/tauriLog'
 import { installTauriStorageFlush, loadTauriStorage } from './lib/tauriStorage'
 import { installMobileViewportGuards } from './lib/viewport'
@@ -53,10 +54,22 @@ async function start() {
     await loadTauriStorage()
     void installTauriStorageFlush().catch((err) => console.error('注册关闭前保存失败：', err))
   }
+
+  // 服务端配置必须在 App 之前读入内存：代理开关、占位密钥和预置配置都由它决定
+  const serverConfig = await loadServerConfig()
+  const needGate = Boolean(serverConfig?.passwordRequired) && !(await isAccessPasswordSatisfied())
   const { default: App } = await import('./App')
+  const { default: AccessGate } = await import('./components/AccessGate')
+
+  function Bootstrap() {
+    const [unlocked, setUnlocked] = useState(!needGate)
+    if (unlocked) return <App />
+    return <AccessGate onPassed={() => setUnlocked(true)} />
+  }
+
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
-      <App />
+      <Bootstrap />
     </StrictMode>,
   )
 }

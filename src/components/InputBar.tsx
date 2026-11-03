@@ -21,6 +21,7 @@ import { useVisibleTasks } from '../hooks/usePrivacyMode'
 import { downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime, getDownloadErrorMessage, getTaskOutputImageZipEntries, withSaveLocation } from '../lib/downloadImages'
 import { pickSaveDir } from '../lib/saveFile'
 import { isTauri } from '../lib/platform'
+import { isServerMode } from '../lib/serverMode'
 import SizePickerModal from './SizePickerModal'
 import { CloseIcon, CollapseIcon, ExpandIcon, LinkIcon, SketchIcon } from './icons'
 import { CommentBadge } from './CommentMarks'
@@ -469,7 +470,8 @@ export default function InputBar() {
       ? settings
       : normalizeSettings({ ...settings, activeProfileId: activeProfile.id })
   ), [activeProfile.id, settingsActiveProfile.id, settings])
-  const hasSubmitApiConfig = Boolean(activeProfile.apiKey)
+  // 服务端模式下密钥在部署端，即使配置里没有占位 Key 也允许提交
+  const hasSubmitApiConfig = Boolean(activeProfile.apiKey) || isServerMode()
   // 批量进行中暂停画廊和 Agent 的提交，需等待完成或停止后再提交
   const batchRunning = Boolean(batchProgress)
   const canSubmit = Boolean(prompt.trim() && hasSubmitApiConfig && !activeAgentIsRunning && !batchRunning)
