@@ -36,7 +36,7 @@
     // 上游鉴权头：bearer（默认）、apikey（X-Api-Key）、basic、none
     "UPSTREAM_AUTH_HEADER": "bearer",
     // 前端默认模型 ID，留空时使用应用内置默认值
-    "DEFAULT_IMAGE_MODEL": "",
+    "DEFAULT_IMAGE_MODEL": "gpt-image-2.5-sunburst, gpt-image-2.5-flare",
     // Agnes Image 接口，例如 https://apihub.agnes-ai.com/v1
     "AGNES_BASE_URL": "https://apihub.agnes-ai.com/v1",
     "AGNES_AUTH_HEADER": "bearer",
