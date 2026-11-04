@@ -34,6 +34,10 @@
     "UPSTREAM_AUTH_HEADER": "bearer",
     // 前端默认模型 ID，留空时使用应用内置默认值
     "DEFAULT_IMAGE_MODEL": "",
+    // Agnes Image 接口，例如 https://apihub.agnes-ai.com/v1
+    "AGNES_BASE_URL": "https://apihub.agnes-ai.com/v1",
+    "AGNES_AUTH_HEADER": "bearer",
+    "AGNES_IMAGE_MODEL": "agnes-image-2.5-flash",
     // 访问口令，留空表示对所有人开放
     "ACCESS_PASSWORD": "",
     // 单次上游请求的超时（毫秒）

@@ -13,6 +13,9 @@ export interface ServerConfig {
   backgroundJobs: boolean
   /** 部署端建议的默认模型 ID，留空时前端使用内置默认值 */
   model?: string
+  agnesModel?: string
+  openaiEnabled?: boolean
+  agnesEnabled?: boolean
 }
 
 /** 服务端模式下前端使用的占位 Key，请求会经 Worker 转发，实际鉴权由服务端注入 */
@@ -25,8 +28,11 @@ const TOKEN_STORAGE_KEY = 'gpt-image-server-token'
 const CONFIG_ENDPOINT = '/api/server-config'
 const SESSION_ENDPOINT = '/api/session'
 const SERVER_PROFILE_ID = 'default-openai'
+const SERVER_AGNES_PROFILE_ID = 'default-agnes'
 const SERVER_PROFILE_NAME = '部署端配置'
+const SERVER_AGNES_PROFILE_NAME = 'Agnes Image'
 const SERVER_PROFILE_MODEL = 'gpt-image-1'
+const SERVER_AGNES_PROFILE_MODEL = 'agnes-image-2.5-flash'
 
 let cached: ServerConfig | null = readCachedConfig()
 
@@ -58,7 +64,10 @@ function normalizeServerConfig(input: unknown): ServerConfig | null {
     apiProxyAvailable: record.apiProxyAvailable !== false,
     apiProxyLocked: record.apiProxyLocked !== false,
     backgroundJobs: record.backgroundJobs === true,
+    openaiEnabled: record.openaiEnabled !== false,
+    agnesEnabled: record.agnesEnabled === true,
     ...(typeof record.model === 'string' && record.model.trim() ? { model: record.model.trim() } : {}),
+    ...(typeof record.agnesModel === 'string' && record.agnesModel.trim() ? { agnesModel: record.agnesModel.trim() } : {}),
   }
 }
 
@@ -148,24 +157,49 @@ export function isBackgroundJobsEnabled() {
  * 服务端模式下的预置配置：API 配置全部来自部署端，前端只保留一个占位配置，
  * 用户无需也无法填写地址与密钥。地址留空，因为代理开启时地址不参与拼接。
  */
-export function createServerPresetConfig(modelId?: string) {
-  const model = modelId?.trim() || SERVER_PROFILE_MODEL
-  return {
-    customProviders: [],
-    profiles: [{
+export function isAgnesServerProfile(profileId?: string) {
+  return profileId === SERVER_AGNES_PROFILE_ID
+}
+
+export function createServerPresetConfig(config?: Pick<ServerConfig, 'model' | 'agnesModel' | 'openaiEnabled' | 'agnesEnabled'> | string) {
+  const resolved = typeof config === 'string' || config === undefined
+    ? { model: config, openaiEnabled: true, agnesEnabled: false }
+    : config
+  const openaiEnabled = resolved.openaiEnabled !== false
+  const agnesEnabled = resolved.agnesEnabled === true
+  const openaiModel = resolved.model?.trim() || SERVER_PROFILE_MODEL
+  const agnesModel = resolved.agnesModel?.trim() || SERVER_AGNES_PROFILE_MODEL
+  const profiles = [
+    ...(openaiEnabled ? [{
       id: SERVER_PROFILE_ID,
       name: SERVER_PROFILE_NAME,
       provider: 'openai' as const,
       baseUrl: '',
       apiKey: SERVICE_MANAGED_API_KEY,
-      model,
-      imageGenerationModel: model,
+      model: openaiModel,
+      imageGenerationModel: openaiModel,
       timeout: 600,
       apiMode: 'images' as const,
       apiProxy: true,
       codexCli: false,
       transparentBackgroundMethod: 'api' as const,
       isDefault: true,
-    }],
-  }
+    }] : []),
+    ...(agnesEnabled ? [{
+      id: SERVER_AGNES_PROFILE_ID,
+      name: SERVER_AGNES_PROFILE_NAME,
+      provider: 'openai' as const,
+      baseUrl: '',
+      apiKey: SERVICE_MANAGED_API_KEY,
+      model: agnesModel,
+      imageGenerationModel: agnesModel,
+      timeout: 600,
+      apiMode: 'images' as const,
+      apiProxy: true,
+      codexCli: false,
+      transparentBackgroundMethod: 'api' as const,
+      isDefault: !openaiEnabled,
+    }] : []),
+  ]
+  return { customProviders: [], profiles }
 }

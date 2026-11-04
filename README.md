@@ -304,7 +304,11 @@ npx wrangler secret put UPSTREAM_API_KEY      # 上游 API Key
 | `UPSTREAM_BASE_URL` | 上游 OpenAI 兼容接口的基础地址，如 `https://api.example.com/v1` |
 | `UPSTREAM_API_KEY` | 上游 API Key，建议用 `wrangler secret put` 写入 |
 | `UPSTREAM_AUTH_HEADER` | 上游鉴权头：`bearer`（默认）、`apikey`（`X-Api-Key`）、`basic`、`none` |
-| `DEFAULT_IMAGE_MODEL` | 前端默认模型 ID，留空时使用应用内置默认值 |
+| `DEFAULT_IMAGE_MODEL` | OpenAI 兼容上游的默认模型 ID，多个用逗号分隔 |
+| `AGNES_BASE_URL` | Agnes Image 接口地址，默认 `https://apihub.agnes-ai.com/v1` |
+| `AGNES_API_KEY` | Agnes API Key，建议用 `wrangler secret put AGNES_API_KEY` 写入 |
+| `AGNES_AUTH_HEADER` | Agnes 鉴权头，默认 `bearer` |
+| `AGNES_IMAGE_MODEL` | Agnes 模型 ID，默认 `agnes-image-2.5-flash` |
 | `ACCESS_PASSWORD` | 访问口令，留空表示对所有人开放；设置后页面会先要求验证 |
 | `PROXY_TIMEOUT_MS` | 单次上游请求超时（毫秒），默认 `600000` |
 | `JOB_MAX_ATTEMPTS` | 后台任务失败后的最大尝试次数，默认 `3` |
@@ -314,6 +318,7 @@ npx wrangler secret put UPSTREAM_API_KEY      # 上游 API Key
 ```bash
 npx wrangler login
 npx wrangler secret put UPSTREAM_API_KEY
+npx wrangler secret put AGNES_API_KEY
 npm run deploy:cf
 ```
 
@@ -326,7 +331,7 @@ npm run deploy:cf
 
 **说明**
 
-- 服务端模式下 API 配置由部署端提供并锁定，用户只能选模型，不能改地址和 Key。
+- 服务端模式下 API 配置由部署端提供并锁定，用户只能选模型，不能改地址和 Key。配置了 Agnes 后，设置里会出现独立的「Agnes Image」配置，生图仍走 `POST /v1/images/generations`，Worker 会把 `size`、图生图参考图和 `response_format` 改写成 Agnes 格式。
 - 文生图和图生图都会走后台任务：提交后立即返回任务 ID，Durable Object 在后台调用上游，失败会按 5s / 20s / 60s 退避重试。
 - 上游若同样在 Cloudflare 之后仍可能触发 524；后台任务会自动重试，浏览器侧不会一直占着一条长连接。
 

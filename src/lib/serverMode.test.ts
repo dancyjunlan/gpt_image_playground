@@ -23,6 +23,22 @@ describe('serverMode', () => {
     expect(profile.isDefault).toBe(true)
   })
 
+  it('Agnes 启用时额外下发独立配置', () => {
+    const preset = createServerPresetConfig({
+      model: 'gpt-image-1',
+      agnesModel: 'agnes-image-2.5-flash',
+      openaiEnabled: true,
+      agnesEnabled: true,
+    })
+    expect(preset.profiles.map((profile) => profile.id)).toEqual(['default-openai', 'default-agnes'])
+    expect(preset.profiles[1]).toMatchObject({
+      name: 'Agnes Image',
+      model: 'agnes-image-2.5-flash',
+      apiProxy: true,
+      apiKey: SERVICE_MANAGED_API_KEY,
+    })
+  })
+
   it('纯静态部署时读取配置失败并返回 null', async () => {
     const original = globalThis.fetch
     globalThis.fetch = (() => Promise.resolve(new Response('Not Found', { status: 404 }))) as typeof fetch

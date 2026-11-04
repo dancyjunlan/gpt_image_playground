@@ -15,7 +15,12 @@ interface Env {
   UPSTREAM_BASE_URL: string
   UPSTREAM_API_KEY?: string
   UPSTREAM_AUTH_HEADER?: string
+  UPSTREAM_PROTOCOL?: string
   DEFAULT_IMAGE_MODEL?: string
+  AGNES_BASE_URL?: string
+  AGNES_API_KEY?: string
+  AGNES_AUTH_HEADER?: string
+  AGNES_IMAGE_MODEL?: string
   ACCESS_PASSWORD?: string
   PROXY_TIMEOUT_MS?: string
   JOB_MAX_ATTEMPTS?: string
@@ -37,13 +42,20 @@ const json = (body: unknown, status = 200, headers: Record<string, string> = {})
 
 const readEnv = (value: string | undefined) => String.prototype.trim.call(value ?? '')
 
-function getUpstreamBase(env: Env) {
-  const raw = readEnv(env.UPSTREAM_BASE_URL)
+function normalizeHttpBase(raw: string) {
   if (!raw) return null
   const withScheme = /^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(raw) ? raw : `https://${raw}`
   const url = new URL(withScheme)
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
   return url.toString().replace(/\/+$/, '')
+}
+
+function getUpstreamBase(env: Env) {
+  return normalizeHttpBase(readEnv(env.UPSTREAM_BASE_URL))
+}
+
+function getAgnesBase(env: Env) {
+  return normalizeHttpBase(readEnv(env.AGNES_BASE_URL))
 }
 
 function getAuthHeader(env: Env): UpstreamAuth {
@@ -67,11 +79,16 @@ function buildUpstreamAuth(env: Env): Record<string, string> {
 }
 
 function isServerConfig(env: Env) {
-  return Boolean(getUpstreamBase(env))
+  return Boolean(
+    (getUpstreamBase(env) && readEnv(env.UPSTREAM_API_KEY))
+    || (getAgnesBase(env) && readEnv(env.AGNES_API_KEY)),
+  )
 }
 
 function getPublicConfig(env: Env) {
   const serverMode = isServerConfig(env)
+  const openaiEnabled = Boolean(getUpstreamBase(env) && readEnv(env.UPSTREAM_API_KEY))
+  const agnesEnabled = Boolean(getAgnesBase(env) && readEnv(env.AGNES_API_KEY))
   return {
     serverMode,
     // 只有服务端模式（有上游地址）才需要口令；否则是纯静态部署，接口全部不可用
@@ -81,6 +98,9 @@ function getPublicConfig(env: Env) {
     // 后台任务模式下浏览器不保持长连接，由 Durable Object 跑完再取结果
     backgroundJobs: serverMode && Boolean(env.IMAGE_JOBS),
     model: readEnv(env.DEFAULT_IMAGE_MODEL) || undefined,
+    agnesModel: readEnv(env.AGNES_IMAGE_MODEL) || undefined,
+    openaiEnabled,
+    agnesEnabled,
   }
 }
 
@@ -255,9 +275,17 @@ async function handleCreateJob(request: Request, env: Env) {
   const upstream = url.searchParams.get('upstream') ?? 'images/generations'
   if (!/^[\w./-]+$/.test(upstream)) return json({ error: { message: '上游路径不合法' } }, 400)
 
+  const protocol = url.searchParams.get('protocol') === 'agnes' ? 'agnes' : 'openai'
+  if (protocol === 'agnes' && !(getAgnesBase(env) && readEnv(env.AGNES_API_KEY))) {
+    return json({ error: { message: '服务端未配置 Agnes API 地址或密钥' } }, 503)
+  }
+  if (protocol === 'openai' && !(getUpstreamBase(env) && readEnv(env.UPSTREAM_API_KEY))) {
+    return json({ error: { message: '服务端未配置上游 API 地址或密钥' } }, 503)
+  }
+
   const id = crypto.randomUUID()
   const stub = env.IMAGE_JOBS.get(env.IMAGE_JOBS.idFromName(id))
-  const target = new URL(`https://job.internal/?action=start&job=${encodeURIComponent(id)}&upstream=${encodeURIComponent(upstream)}&origin=${encodeURIComponent(url.origin)}`)
+  const target = new URL(`https://job.internal/?action=start&job=${encodeURIComponent(id)}&protocol=${protocol}&upstream=${encodeURIComponent(upstream)}&origin=${encodeURIComponent(url.origin)}`)
 
   const init: RequestInit & { duplex?: string } = {
     method: 'POST',

@@ -8,16 +8,24 @@
  * 由 alarm 触发执行，避免依赖 Worker 请求的存活时间。
  */
 
+import { collectAgnesImages, rewriteAgnesRequest } from './agnes'
+
 interface JobEnv {
   UPSTREAM_BASE_URL: string
   UPSTREAM_API_KEY?: string
   UPSTREAM_AUTH_HEADER?: string
+  UPSTREAM_PROTOCOL?: string
+  AGNES_BASE_URL?: string
+  AGNES_API_KEY?: string
+  AGNES_AUTH_HEADER?: string
+  AGNES_IMAGE_MODEL?: string
   PROXY_TIMEOUT_MS?: string
   JOB_MAX_ATTEMPTS?: string
 }
 
 interface JobMeta {
   publicId: string
+  protocol: 'openai' | 'agnes'
   upstreamPath: string
   origin: string
   contentType: string
@@ -43,17 +51,25 @@ function bytesToBase64(bytes: Uint8Array) {
   return btoa(binary)
 }
 
-function getUpstreamBase(env: JobEnv) {
-  const raw = readEnv(env.UPSTREAM_BASE_URL)
+function normalizeBaseUrl(raw: string) {
   if (!raw) return null
   const withScheme = /^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(raw) ? raw : `https://${raw}`
   return new URL(withScheme).toString().replace(/\/+$/, '')
 }
 
-function buildUpstreamAuth(env: JobEnv): Record<string, string> {
-  const key = readEnv(env.UPSTREAM_API_KEY)
+function getJobProtocol(env: JobEnv, requested?: string | null): 'openai' | 'agnes' {
+  if (requested === 'agnes' || requested === 'openai') return requested
+  return readEnv(env.UPSTREAM_PROTOCOL).toLowerCase() === 'agnes' ? 'agnes' : 'openai'
+}
+
+function getUpstreamBase(env: JobEnv, protocol: 'openai' | 'agnes' = 'openai') {
+  return normalizeBaseUrl(readEnv(protocol === 'agnes' ? env.AGNES_BASE_URL : env.UPSTREAM_BASE_URL))
+}
+
+function buildUpstreamAuth(env: JobEnv, protocol: 'openai' | 'agnes' = 'openai'): Record<string, string> {
+  const key = readEnv(protocol === 'agnes' ? env.AGNES_API_KEY : env.UPSTREAM_API_KEY)
   if (!key) return {}
-  const mode = readEnv(env.UPSTREAM_AUTH_HEADER).toLowerCase()
+  const mode = readEnv(protocol === 'agnes' ? env.AGNES_AUTH_HEADER : env.UPSTREAM_AUTH_HEADER).toLowerCase()
   if (mode === 'apikey') return { 'X-Api-Key': key }
   if (mode === 'basic') return { Authorization: `Basic ${key}` }
   if (mode === 'none') return {}
@@ -138,6 +154,7 @@ export class ImageJob {
 
     const meta: JobMeta = {
       publicId: url.searchParams.get('job') ?? this.state.id.toString(),
+      protocol: getJobProtocol(this.env, url.searchParams.get('protocol')),
       upstreamPath: url.searchParams.get('upstream') ?? 'images/generations',
       origin: url.searchParams.get('origin') ?? '',
       contentType: request.headers.get('X-Upstream-Content-Type') || 'application/json',
@@ -203,21 +220,31 @@ export class ImageJob {
     const meta = await this.readMeta()
     if (!meta || meta.status === 'completed' || meta.status === 'failed') return
 
-    const base = getUpstreamBase(this.env)
-    if (!base) return this.fail('服务端未配置上游 API 地址')
+    const protocol = meta.protocol || 'openai'
+    const base = getUpstreamBase(this.env, protocol)
+    if (!base) return this.fail(protocol === 'agnes' ? '服务端未配置 Agnes API 地址' : '服务端未配置上游 API 地址')
 
     meta.status = 'running'
     meta.attempts += 1
     await this.state.storage.put('meta', meta)
 
     try {
-      const body = await this.readBody(meta)
-      const headers = new Headers()
-      headers.set('Content-Type', meta.contentType)
-      headers.set('Accept', meta.accept)
-      Object.entries(buildUpstreamAuth(this.env)).forEach(([name, value]) => headers.set(name, value))
+      let body = await this.readBody(meta)
+      let contentType = meta.contentType
+      let path = meta.upstreamPath
+      if (protocol === 'agnes') {
+        const rewritten = await rewriteAgnesRequest(body, contentType, readEnv(this.env.AGNES_IMAGE_MODEL) || 'agnes-image-2.5-flash')
+        body = new Uint8Array(rewritten.body)
+        contentType = rewritten.contentType
+        path = rewritten.path
+      }
 
-      const response = await fetch(`${base}/${meta.upstreamPath}`, {
+      const headers = new Headers()
+      headers.set('Content-Type', contentType)
+      headers.set('Accept', meta.accept)
+      Object.entries(buildUpstreamAuth(this.env, protocol)).forEach(([name, value]) => headers.set(name, value))
+
+      const response = await fetch(`${base}/${path}`, {
         method: 'POST',
         headers,
         body,
@@ -237,7 +264,9 @@ export class ImageJob {
       }
 
       const fallbackMime = meta.contentType.includes('json') && text.includes('"output_format":"webp"') ? 'image/webp' : 'image/png'
-      const images = extractImages(payload, fallbackMime)
+      const images = protocol === 'agnes'
+        ? await collectAgnesImages(payload, fallbackMime)
+        : extractImages(payload, fallbackMime)
       if (!images.length) {
         throw new Error(`上游没有返回可识别的图片：${text.slice(0, 200)}`)
       }

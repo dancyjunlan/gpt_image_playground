@@ -140,7 +140,7 @@ export default function App() {
       .then(async () => {
         // 服务端模式下地址与密钥都在部署端，配置列表由 Worker 统一下发
         const importedSettings = isServerMode()
-          ? createServerPresetConfig(getServerConfig()?.model)
+          ? createServerPresetConfig(getServerConfig() ?? undefined)
           : embeddedDefaultConfig || customProviderConfigUrl
             ? await loadDefaultConfig()
             : hasDefaultPresetConfig()
