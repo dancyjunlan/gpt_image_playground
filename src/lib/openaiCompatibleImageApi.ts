@@ -509,6 +509,7 @@ async function callServerBackgroundJob(opts: CallApiOptions, profile: ApiProfile
       formData.append('image[]', blob, `input-${i + 1}.${blob.type.split('/')[1] || 'png'}`)
     }
     payload = formData
+    delete headers['Content-Type']
   } else {
     payload = JSON.stringify(body)
     headers['Content-Type'] = 'application/json'

@@ -116,15 +116,26 @@ export class ImageJob {
   }
 
   private async readBody(meta: JobMeta) {
-    const chunks: string[] = []
+    const parts: Uint8Array[] = []
+    let total = 0
     for (let i = 0; i < meta.chunkCount; i += 1) {
-      const chunk = await this.state.storage.get<string>(`chunk:${i}`)
-      if (chunk) chunks.push(chunk)
+      const chunk = await this.state.storage.get<ArrayBuffer | Uint8Array | string>(`chunk:${i}`)
+      if (!chunk) continue
+      const bytes = typeof chunk === 'string'
+        ? Uint8Array.from(atob(chunk), (char) => char.charCodeAt(0))
+        : chunk instanceof Uint8Array
+          ? chunk
+          : new Uint8Array(chunk)
+      parts.push(bytes)
+      total += bytes.length
     }
-    const binary = atob(chunks.join(''))
-    const bytes = new Uint8Array(binary.length)
-    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
-    return bytes
+    const merged = new Uint8Array(total)
+    let offset = 0
+    for (const part of parts) {
+      merged.set(part, offset)
+      offset += part.length
+    }
+    return merged
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -146,10 +157,9 @@ export class ImageJob {
     if (existing) return this.status()
 
     const body = new Uint8Array(await request.arrayBuffer())
-    const base64 = bytesToBase64(body)
-    const chunkCount = Math.max(1, Math.ceil(base64.length / CHUNK_SIZE))
+    const chunkCount = Math.max(1, Math.ceil(body.length / CHUNK_SIZE) || 1)
     for (let i = 0; i < chunkCount; i += 1) {
-      await this.state.storage.put(`chunk:${i}`, base64.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE))
+      await this.state.storage.put(`chunk:${i}`, body.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE))
     }
 
     const meta: JobMeta = {

@@ -1852,4 +1852,73 @@ describe('callImageApi', () => {
       images: ['data:image/png;base64,aW1hZ2U='],
     })
   })
+
+  it('sends OpenAI mask edits through /api/jobs images/edits in server background mode', async () => {
+    vi.useFakeTimers()
+    vi.resetModules()
+    vi.doMock('./serverMode', async () => {
+      const actual = await vi.importActual<typeof import('./serverMode')>('./serverMode')
+      return {
+        ...actual,
+        isServerMode: () => true,
+        isBackgroundJobsEnabled: () => true,
+        isAgnesServerProfile: (id?: string) => id === 'default-agnes',
+      }
+    })
+    vi.doMock('./canvasImage', async () => {
+      const actual = await vi.importActual<typeof import('./canvasImage')>('./canvasImage')
+      const toBlob = async () => new Blob([Uint8Array.from([1, 2, 3])], { type: 'image/png' })
+      return {
+        ...actual,
+        dataUrlToBlob: toBlob,
+        imageDataUrlToPngBlob: toBlob,
+        maskDataUrlToPngBlob: toBlob,
+      }
+    })
+    const { callImageApi: callImageApiWithJobs } = await import('./api')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.startsWith('/api/jobs?')) {
+        expect(url).toContain('protocol=openai')
+        expect(url).toContain('upstream=images%2Fedits')
+        return new Response(JSON.stringify({ id: 'job-edit-1' }), { status: 202, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url === '/api/jobs/job-edit-1') {
+        return new Response(JSON.stringify({
+          status: 'completed',
+          result: { data: [{ url: '/api/jobs/job-edit-1/image?index=0' }] },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.includes('/image?index=0')) {
+        const bytes = Uint8Array.from(atob('aW1hZ2U='), (char) => char.charCodeAt(0))
+        return new Response(bytes, { status: 200, headers: { 'Content-Type': 'image/png' } })
+      }
+      throw new Error(`unexpected fetch ${url}`)
+    })
+
+    const png = 'data:image/png;base64,aW1hZ2U='
+    const promise = callImageApiWithJobs({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        profiles: [{ ...DEFAULT_SETTINGS.profiles[0], id: 'default-openai', apiKey: 'server-managed', timeout: 30 }],
+        activeProfileId: 'default-openai',
+      },
+      prompt: 'edit the hat',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [png],
+      maskDataUrl: png,
+    })
+    await vi.advanceTimersByTimeAsync(4000)
+    await expect(promise).resolves.toMatchObject({
+      images: [expect.stringMatching(/^data:image\/png;base64,/)],
+    })
+    const submit = fetchMock.mock.calls.find(([url]) => String(url).startsWith('/api/jobs?'))
+    expect(submit).toBeTruthy()
+    const init = submit?.[1] as RequestInit
+    expect(init.body).toBeInstanceOf(FormData)
+    expect((init.body as FormData).get('mask')).toBeTruthy()
+    expect((init.headers as Record<string, string>)['Content-Type']).toBeUndefined()
+    vi.doUnmock('./serverMode')
+    vi.resetModules()
+  })
 })
