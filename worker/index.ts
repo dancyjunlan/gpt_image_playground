@@ -303,7 +303,7 @@ async function handleCreateJob(request: Request, env: Env) {
 
 async function handleJob(request: Request, env: Env, jobId: string) {
   const url = new URL(request.url)
-  const action = url.pathname.includes('/input') ? 'input' : url.pathname.endsWith('/image') ? 'image' : 'status'
+  const action = url.pathname.endsWith('/image') ? 'image' : 'status'
   const stub = env.IMAGE_JOBS.get(env.IMAGE_JOBS.idFromName(jobId))
   const target = `https://job.internal/?action=${action}${url.search ? `&${url.search.slice(1)}` : ''}`
   const upstream = await stub.fetch(target)

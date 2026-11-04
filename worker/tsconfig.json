@@ -11,5 +11,5 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["index.ts", "jobs.ts", "agnes.ts", "grokImagine.ts", "cloudflare.d.ts"]
+  "include": ["index.ts", "jobs.ts", "agnes.ts", "cloudflare.d.ts"]
 }

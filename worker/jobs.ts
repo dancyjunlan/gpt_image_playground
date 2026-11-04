@@ -9,14 +9,6 @@
  */
 
 import { collectAgnesImages, rewriteAgnesRequest } from './agnes'
-import {
-  collectGrokImagineImages,
-  isGrokImagineModel,
-  peekRequestModel,
-  pollGrokImagineTask,
-  readGrokTaskId,
-  rewriteGrokImagineRequest,
-} from './grokImagine'
 
 interface JobEnv {
   UPSTREAM_BASE_URL: string
@@ -43,7 +35,6 @@ interface JobMeta {
   attempts: number
   error?: string
   images?: Array<{ mime: string; bytes: number }>
-  inputs?: Array<{ mime: string; bytes: number }>
 }
 
 const CHUNK_SIZE = 100_000
@@ -95,18 +86,39 @@ function getRequestTimeout(env: JobEnv) {
   return Number.isFinite(value) && value >= 1000 ? value : 300_000
 }
 
+function bytesToBase64String(bytes: Uint8Array) {
+  const chunkSize = 0x8000
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  return btoa(binary)
+}
+
 /** 从上游响应里取出图片，统一成 {mime, base64} */
-function extractImages(payload: unknown, fallbackMime: string): Array<{ mime: string; base64: string }> {
+async function extractImages(payload: unknown, fallbackMime: string): Promise<Array<{ mime: string; base64: string }>> {
   const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {}
   const items = Array.isArray(record.data) ? record.data : Array.isArray(payload) ? payload : []
   const images: Array<{ mime: string; base64: string }> = []
   for (const item of items) {
     if (!item || typeof item !== 'object') continue
     const entry = item as Record<string, unknown>
-    const base64 = typeof entry.b64_json === 'string' ? entry.b64_json : typeof entry.base64 === 'string' ? entry.base64 : ''
-    if (!base64) continue
-    const format = typeof entry.output_format === 'string' ? entry.output_format : ''
-    images.push({ mime: format === 'jpeg' ? 'image/jpeg' : format === 'webp' ? 'image/webp' : fallbackMime, base64 })
+    const raw = typeof entry.b64_json === 'string' ? entry.b64_json : typeof entry.base64 === 'string' ? entry.base64 : ''
+    if (raw.trim()) {
+      const format = typeof entry.output_format === 'string' ? entry.output_format : ''
+      images.push({
+        mime: format === 'jpeg' ? 'image/jpeg' : format === 'webp' ? 'image/webp' : fallbackMime,
+        base64: raw.replace(/^data:[^;]+;base64,/, ''),
+      })
+      continue
+    }
+    if (typeof entry.url === 'string' && /^https?:\/\//i.test(entry.url)) {
+      const response = await fetch(entry.url, { cache: 'no-store' })
+      if (!response.ok) throw new Error(`无法下载上游图片（HTTP ${response.status}）`)
+      const bytes = new Uint8Array(await response.arrayBuffer())
+      const mime = response.headers.get('Content-Type')?.split(';')[0] || fallbackMime
+      images.push({ mime, base64: bytesToBase64String(bytes) })
+    }
   }
   return images
 }
@@ -154,7 +166,6 @@ export class ImageJob {
     if (action === 'start') return this.start(request, url)
     if (action === 'status') return this.status()
     if (action === 'image') return this.image(Number(url.searchParams.get('index') ?? '0'))
-    if (action === 'input') return this.input(Number(url.searchParams.get('index') ?? '0'))
 
     return new Response(JSON.stringify({ error: { message: '未知的任务操作' } }), {
       status: 404,
@@ -235,34 +246,6 @@ export class ImageJob {
     })
   }
 
-  private async input(index: number) {
-    const meta = await this.readMeta()
-    const info = meta?.inputs?.[index]
-    if (!meta || !info) return new Response('Not Found', { status: 404 })
-    const chunks: Uint8Array[] = []
-    let total = 0
-    for (let i = 0; i < info.bytes; i += 1) {
-      const chunk = await this.state.storage.get<ArrayBuffer | Uint8Array>(`input:${index}:${i}`)
-      if (!chunk) continue
-      const bytes = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk)
-      chunks.push(bytes)
-      total += bytes.length
-    }
-    const merged = new Uint8Array(total)
-    let offset = 0
-    for (const chunk of chunks) {
-      const bytes = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk)
-      merged.set(bytes, offset)
-      offset += bytes.length
-    }
-    return new Response(merged, {
-      headers: {
-        'Content-Type': info.mime,
-        'Cache-Control': 'private, max-age=300',
-      },
-    })
-  }
-
   /** 由 alarm 触发：真正调用上游，失败按退避重试 */
   async alarm() {
     const meta = await this.readMeta()
@@ -280,37 +263,16 @@ export class ImageJob {
       let body = await this.readBody(meta)
       let contentType = meta.contentType
       let path = meta.upstreamPath
-      let grokTask = false
       if (protocol === 'agnes') {
         const rewritten = await rewriteAgnesRequest(body, contentType, readEnv(this.env.AGNES_IMAGE_MODEL) || 'agnes-image-2.5-flash')
         body = new Uint8Array(rewritten.body)
         contentType = rewritten.contentType
         path = rewritten.path
-      } else if (isGrokImagineModel(await peekRequestModel(body, contentType))) {
-        const rewritten = await rewriteGrokImagineRequest(body, contentType, meta.origin, meta.publicId)
-        const savedInputs: Array<{ mime: string; bytes: number }> = []
-        for (let index = 0; index < rewritten.inputs.length; index += 1) {
-          const input = rewritten.inputs[index]
-          const count = Math.max(1, Math.ceil(input.bytes.length / CHUNK_SIZE) || 1)
-          for (let i = 0; i < count; i += 1) {
-            await this.state.storage.put(`input:${index}:${i}`, input.bytes.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE))
-          }
-          savedInputs.push({ mime: input.mime, bytes: count })
-        }
-        if (savedInputs.length) {
-          meta.inputs = savedInputs
-          await this.state.storage.put('meta', meta)
-        }
-        body = new Uint8Array(rewritten.body)
-        contentType = rewritten.contentType
-        path = rewritten.path
-        grokTask = true
       }
 
       const headers = new Headers()
       headers.set('Content-Type', contentType)
       headers.set('Accept', meta.accept)
-      if (grokTask) headers.set('Idempotency-Key', meta.publicId)
       Object.entries(buildUpstreamAuth(this.env, protocol)).forEach(([name, value]) => headers.set(name, value))
 
       const response = await fetch(`${base}/${path}`, {
@@ -333,17 +295,9 @@ export class ImageJob {
       }
 
       const fallbackMime = meta.contentType.includes('json') && text.includes('"output_format":"webp"') ? 'image/webp' : 'image/png'
-      let images = protocol === 'agnes'
+      const images = protocol === 'agnes'
         ? await collectAgnesImages(payload, fallbackMime)
-        : extractImages(payload, fallbackMime)
-      if (!images.length && grokTask) {
-        const taskId = readGrokTaskId(payload)
-        if (!taskId) throw new Error(`Grok 任务没有返回 task_id：${text.slice(0, 200)}`)
-        const pollHeaders = new Headers()
-        Object.entries(buildUpstreamAuth(this.env, protocol)).forEach(([name, value]) => pollHeaders.set(name, value))
-        const finished = await pollGrokImagineTask(base, taskId, pollHeaders, getRequestTimeout(this.env))
-        images = await collectGrokImagineImages(finished, fallbackMime)
-      }
+        : await extractImages(payload, fallbackMime)
       if (!images.length) {
         throw new Error(`上游没有返回可识别的图片：${text.slice(0, 200)}`)
       }
