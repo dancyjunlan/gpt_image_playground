@@ -303,7 +303,7 @@ async function handleCreateJob(request: Request, env: Env) {
 
 async function handleJob(request: Request, env: Env, jobId: string) {
   const url = new URL(request.url)
-  const action = url.pathname.endsWith('/image') ? 'image' : 'status'
+  const action = url.pathname.includes('/input') ? 'input' : url.pathname.endsWith('/image') ? 'image' : 'status'
   const stub = env.IMAGE_JOBS.get(env.IMAGE_JOBS.idFromName(jobId))
   const target = `https://job.internal/?action=${action}${url.search ? `&${url.search.slice(1)}` : ''}`
   const upstream = await stub.fetch(target)
@@ -333,7 +333,8 @@ export default {
       if (url.pathname === JOBS_PREFIX || url.pathname === `${JOBS_PREFIX}/`) return handleCreateJob(request, env)
 
       const rest = url.pathname.slice(JOBS_PREFIX.length + 1)
-      const [jobId] = rest.split('/').filter(Boolean)
+      const parts = rest.split('/').filter(Boolean)
+      const jobId = parts[0]
       if (!jobId) return json({ error: { message: '缺少任务 ID' } }, 400)
       return handleJob(request, env, jobId)
     }

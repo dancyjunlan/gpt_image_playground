@@ -332,6 +332,7 @@ npm run deploy:cf
 **说明**
 
 - 服务端模式下 API 配置由部署端提供并锁定，用户只能选模型，不能改地址和 Key。配置了 Agnes 后，设置里会出现独立的「Agnes Image」配置，生图仍走 `POST /v1/images/generations`，Worker 会把 `size`、图生图参考图和 `response_format` 改写成 Agnes 格式。
+- 默认 OpenAI 兼容上游里，只有 `grok-imagine-image-*` 会改走 `POST /v1/images/tasks` 并轮询 `GET /v1/tasks/{task_id}`。普通 grok 聊天模型仍用 `/images/generations`。Grok Imagine 的 `size` 会映射成比例，`resolution` 为 `1K`/`2K`；参考图会先托管到本站再以公网 URL 提交。
 - 文生图和图生图都会走后台任务：提交后立即返回任务 ID，Durable Object 在后台调用上游，失败会按 5s / 20s / 60s 退避重试。
 - 上游若同样在 Cloudflare 之后仍可能触发 524；后台任务会自动重试，浏览器侧不会一直占着一条长连接。
 
