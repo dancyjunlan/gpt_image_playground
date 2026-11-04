@@ -4,6 +4,9 @@
   "account_id": "7eafdf964fb0c0c6eff1a8796cfab5c3",
   "main": "worker/index.ts",
   "compatibility_date": "2026-05-07",
+  "build": {
+    "command": "npm run build"
+  },
   "assets": {
     "directory": "./dist",
     "not_found_handling": "single-page-application",
