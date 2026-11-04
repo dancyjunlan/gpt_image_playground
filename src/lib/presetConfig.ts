@@ -76,7 +76,7 @@ export function isPresetConfigParamsLocked() {
 }
 
 export function isPresetConfigDeletionPrevented() {
-  return (PREVENT_PRESET_CONFIG_DELETION || SHOW_PRESET_CONFIG_ONLY) && presetProfiles.length > 0
+  return (PREVENT_PRESET_CONFIG_DELETION || SHOW_PRESET_CONFIG_ONLY || isServerMode()) && presetProfiles.length > 0
 }
 
 export function isPresetProfileLocked(id: string) {

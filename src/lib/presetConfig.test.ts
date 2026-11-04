@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 afterEach(() => {
   vi.unstubAllEnvs()
+  vi.doUnmock('./serverMode')
   vi.resetModules()
 })
 
@@ -81,6 +82,26 @@ describe('preset config policy', () => {
     expect(policy.isPresetProviderLocked(provider.id)).toBe(true)
     expect(policy.isPresetProviderDeletionPrevented(provider.id, enforced.profiles)).toBe(true)
     expect(policy.isPresetProviderDeletionPrevented('user-provider', enforced.profiles)).toBe(false)
+  })
+
+  it('restores newly added server-mode presets that are missing from local settings', async () => {
+    vi.doMock('./serverMode', async () => {
+      const actual = await vi.importActual<typeof import('./serverMode')>('./serverMode')
+      return { ...actual, isServerMode: () => true }
+    })
+    const { createDefaultOpenAIProfile, normalizeSettings } = await import('./apiProfiles')
+    const policy = await import('./presetConfig')
+    const openai = createDefaultOpenAIProfile({ id: 'default-openai', name: '部署端配置', isDefault: true })
+    const agnes = createDefaultOpenAIProfile({ id: 'default-agnes', name: 'Agnes Image' })
+    policy.setPresetConfig({ customProviders: [], profiles: [openai, agnes] })
+
+    const enforced = policy.enforcePresetConfigPolicy(normalizeSettings({
+      profiles: [openai],
+      activeProfileId: openai.id,
+    }))
+
+    expect(enforced.profiles.map((profile) => profile.id)).toEqual(['default-openai', 'default-agnes'])
+    expect(enforced.profiles[1].name).toBe('Agnes Image')
   })
 
   it('allows removed presets to stay deleted by default', async () => {
