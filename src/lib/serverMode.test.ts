@@ -39,6 +39,38 @@ describe('serverMode', () => {
     })
   })
 
+  it('secret 渠道启用时追加第三套配置且复用渠道 1 的模型', () => {
+    const preset = createServerPresetConfig({
+      model: 'gpt-image-2.5-sunburst, grok-imagine-image-2.0',
+      agnesModel: 'agnes-image-2.5-flash',
+      openaiEnabled: true,
+      agnesEnabled: true,
+      secretEnabled: true,
+    })
+    expect(preset.profiles.map((profile) => profile.id)).toEqual([
+      'default-openai',
+      'default-agnes',
+      'default-secret',
+    ])
+    expect(preset.profiles[2]).toMatchObject({
+      name: 'secret',
+      model: 'gpt-image-2.5-sunburst, grok-imagine-image-2.0',
+      apiProxy: true,
+      apiKey: SERVICE_MANAGED_API_KEY,
+    })
+  })
+
+  it('只有 secret 渠道时它成为默认配置', () => {
+    const preset = createServerPresetConfig({
+      model: 'gpt-image-2',
+      openaiEnabled: false,
+      agnesEnabled: false,
+      secretEnabled: true,
+    })
+    expect(preset.profiles).toHaveLength(1)
+    expect(preset.profiles[0]).toMatchObject({ id: 'default-secret', isDefault: true })
+  })
+
   it('纯静态部署时读取配置失败并返回 null', async () => {
     const original = globalThis.fetch
     globalThis.fetch = (() => Promise.resolve(new Response('Not Found', { status: 404 }))) as typeof fetch

@@ -10,6 +10,8 @@
 
 import { collectAgnesImages, rewriteAgnesRequest } from './agnes'
 
+type JobProtocol = 'openai' | 'agnes' | 'secret'
+
 interface JobEnv {
   UPSTREAM_BASE_URL: string
   UPSTREAM_API_KEY?: string
@@ -19,13 +21,17 @@ interface JobEnv {
   AGNES_API_KEY?: string
   AGNES_AUTH_HEADER?: string
   AGNES_IMAGE_MODEL?: string
+  SECRET_BASE_URL?: string
+  SECRET_API_KEY?: string
+  SECRET_AUTH_HEADER?: string
+  SECRET_IMAGE_MODEL?: string
   PROXY_TIMEOUT_MS?: string
   JOB_MAX_ATTEMPTS?: string
 }
 
 interface JobMeta {
   publicId: string
-  protocol: 'openai' | 'agnes'
+  protocol: JobProtocol
   upstreamPath: string
   origin: string
   contentType: string
@@ -57,23 +63,47 @@ function normalizeBaseUrl(raw: string) {
   return new URL(withScheme).toString().replace(/\/+$/, '')
 }
 
-function getJobProtocol(env: JobEnv, requested?: string | null): 'openai' | 'agnes' {
-  if (requested === 'agnes' || requested === 'openai') return requested
-  return readEnv(env.UPSTREAM_PROTOCOL).toLowerCase() === 'agnes' ? 'agnes' : 'openai'
+function getJobProtocol(env: JobEnv, requested?: string | null): JobProtocol {
+  if (requested === 'agnes' || requested === 'secret' || requested === 'openai') return requested
+  const fallback = readEnv(env.UPSTREAM_PROTOCOL).toLowerCase()
+  return fallback === 'agnes' ? 'agnes' : 'openai'
 }
 
-function getUpstreamBase(env: JobEnv, protocol: 'openai' | 'agnes' = 'openai') {
-  return normalizeBaseUrl(readEnv(protocol === 'agnes' ? env.AGNES_BASE_URL : env.UPSTREAM_BASE_URL))
+/** 每个渠道一套地址、密钥与鉴权头，互不影响 */
+function getChannelConfig(env: JobEnv, protocol: JobProtocol) {
+  if (protocol === 'agnes') {
+    return {
+      base: normalizeBaseUrl(readEnv(env.AGNES_BASE_URL)),
+      key: readEnv(env.AGNES_API_KEY),
+      auth: readEnv(env.AGNES_AUTH_HEADER),
+    }
+  }
+  if (protocol === 'secret') {
+    return {
+      base: normalizeBaseUrl(readEnv(env.SECRET_BASE_URL)),
+      key: readEnv(env.SECRET_API_KEY),
+      auth: readEnv(env.SECRET_AUTH_HEADER),
+    }
+  }
+  return {
+    base: normalizeBaseUrl(readEnv(env.UPSTREAM_BASE_URL)),
+    key: readEnv(env.UPSTREAM_API_KEY),
+    auth: readEnv(env.UPSTREAM_AUTH_HEADER),
+  }
 }
 
-function buildUpstreamAuth(env: JobEnv, protocol: 'openai' | 'agnes' = 'openai'): Record<string, string> {
-  const key = readEnv(protocol === 'agnes' ? env.AGNES_API_KEY : env.UPSTREAM_API_KEY)
-  if (!key) return {}
-  const mode = readEnv(protocol === 'agnes' ? env.AGNES_AUTH_HEADER : env.UPSTREAM_AUTH_HEADER).toLowerCase()
-  if (mode === 'apikey') return { 'X-Api-Key': key }
-  if (mode === 'basic') return { Authorization: `Basic ${key}` }
+function getUpstreamBase(env: JobEnv, protocol: JobProtocol = 'openai') {
+  return getChannelConfig(env, protocol).base
+}
+
+function buildUpstreamAuth(env: JobEnv, protocol: JobProtocol = 'openai'): Record<string, string> {
+  const channel = getChannelConfig(env, protocol)
+  if (!channel.key) return {}
+  const mode = channel.auth.toLowerCase()
+  if (mode === 'apikey') return { 'X-Api-Key': channel.key }
+  if (mode === 'basic') return { Authorization: `Basic ${channel.key}` }
   if (mode === 'none') return {}
-  return { Authorization: `Bearer ${key}` }
+  return { Authorization: `Bearer ${channel.key}` }
 }
 
 function getAttemptLimit(env: JobEnv) {

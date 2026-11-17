@@ -21,6 +21,10 @@ interface Env {
   AGNES_API_KEY?: string
   AGNES_AUTH_HEADER?: string
   AGNES_IMAGE_MODEL?: string
+  SECRET_BASE_URL?: string
+  SECRET_API_KEY?: string
+  SECRET_AUTH_HEADER?: string
+  SECRET_IMAGE_MODEL?: string
   ACCESS_PASSWORD?: string
   PROXY_TIMEOUT_MS?: string
   JOB_MAX_ATTEMPTS?: string
@@ -58,6 +62,10 @@ function getAgnesBase(env: Env) {
   return normalizeHttpBase(readEnv(env.AGNES_BASE_URL))
 }
 
+function getSecretBase(env: Env) {
+  return normalizeHttpBase(readEnv(env.SECRET_BASE_URL))
+}
+
 function getAuthHeader(env: Env): UpstreamAuth {
   const value = readEnv(env.UPSTREAM_AUTH_HEADER).toLowerCase()
   return value === 'apikey' || value === 'basic' || value === 'none' ? value : 'bearer'
@@ -81,7 +89,8 @@ function buildUpstreamAuth(env: Env): Record<string, string> {
 function isServerConfig(env: Env) {
   return Boolean(
     (getUpstreamBase(env) && readEnv(env.UPSTREAM_API_KEY))
-    || (getAgnesBase(env) && readEnv(env.AGNES_API_KEY)),
+    || (getAgnesBase(env) && readEnv(env.AGNES_API_KEY))
+    || (getSecretBase(env) && readEnv(env.SECRET_API_KEY)),
   )
 }
 
@@ -89,6 +98,7 @@ function getPublicConfig(env: Env) {
   const serverMode = isServerConfig(env)
   const openaiEnabled = Boolean(getUpstreamBase(env) && readEnv(env.UPSTREAM_API_KEY))
   const agnesEnabled = Boolean(getAgnesBase(env) && readEnv(env.AGNES_API_KEY))
+  const secretEnabled = Boolean(getSecretBase(env) && readEnv(env.SECRET_API_KEY))
   return {
     serverMode,
     // 只有服务端模式（有上游地址）才需要口令；否则是纯静态部署，接口全部不可用
@@ -99,8 +109,11 @@ function getPublicConfig(env: Env) {
     backgroundJobs: serverMode && Boolean(env.IMAGE_JOBS),
     model: readEnv(env.DEFAULT_IMAGE_MODEL) || undefined,
     agnesModel: readEnv(env.AGNES_IMAGE_MODEL) || undefined,
+    // secret 渠道留空时沿用渠道 1 的模型列表
+    secretModel: readEnv(env.SECRET_IMAGE_MODEL) || undefined,
     openaiEnabled,
     agnesEnabled,
+    secretEnabled,
   }
 }
 
@@ -275,9 +288,13 @@ async function handleCreateJob(request: Request, env: Env) {
   const upstream = url.searchParams.get('upstream') ?? 'images/generations'
   if (!/^[\w./-]+$/.test(upstream)) return json({ error: { message: '上游路径不合法' } }, 400)
 
-  const protocol = url.searchParams.get('protocol') === 'agnes' ? 'agnes' : 'openai'
+  const requested = url.searchParams.get('protocol')
+  const protocol = requested === 'agnes' || requested === 'secret' ? requested : 'openai'
   if (protocol === 'agnes' && !(getAgnesBase(env) && readEnv(env.AGNES_API_KEY))) {
     return json({ error: { message: '服务端未配置 Agnes API 地址或密钥' } }, 503)
+  }
+  if (protocol === 'secret' && !(getSecretBase(env) && readEnv(env.SECRET_API_KEY))) {
+    return json({ error: { message: '服务端未配置 secret 渠道地址或密钥' } }, 503)
   }
   if (protocol === 'openai' && !(getUpstreamBase(env) && readEnv(env.UPSTREAM_API_KEY))) {
     return json({ error: { message: '服务端未配置上游 API 地址或密钥' } }, 503)

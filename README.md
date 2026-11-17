@@ -309,6 +309,10 @@ npx wrangler secret put UPSTREAM_API_KEY      # 上游 API Key
 | `AGNES_API_KEY` | Agnes API Key，建议用 `wrangler secret put AGNES_API_KEY` 写入 |
 | `AGNES_AUTH_HEADER` | Agnes 鉴权头，默认 `bearer` |
 | `AGNES_IMAGE_MODEL` | Agnes 模型 ID，默认 `agnes-image-2.5-flash` |
+| `SECRET_BASE_URL` | secret 渠道地址，如 `https://sharellm.net/v1`，和上面两套并存 |
+| `SECRET_API_KEY` | secret 渠道 API Key，建议用 `wrangler secret put SECRET_API_KEY` 写入 |
+| `SECRET_AUTH_HEADER` | secret 渠道鉴权头，默认 `bearer` |
+| `SECRET_IMAGE_MODEL` | secret 渠道模型，留空时沿用 `DEFAULT_IMAGE_MODEL` |
 | `ACCESS_PASSWORD` | 访问口令，留空表示对所有人开放；设置后页面会先要求验证 |
 | `PROXY_TIMEOUT_MS` | 单次上游请求超时（毫秒），默认 `600000` |
 | `JOB_MAX_ATTEMPTS` | 后台任务失败后的最大尝试次数，默认 `3` |

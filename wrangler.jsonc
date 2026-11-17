@@ -41,6 +41,11 @@
     "AGNES_BASE_URL": "https://agnes.20033999.xyz/v1",
     "AGNES_AUTH_HEADER": "bearer",
     "AGNES_IMAGE_MODEL": "agnes-image-2.5-flash",
+    // secret 渠道（第三套，和上面两套并存）
+    "SECRET_BASE_URL": "https://sharellm.net/v1",
+    "SECRET_AUTH_HEADER": "bearer",
+    // 留空时沿用 DEFAULT_IMAGE_MODEL
+    "SECRET_IMAGE_MODEL": "",
     // 访问口令，留空表示对所有人开放
     "ACCESS_PASSWORD": "",
     // 单次上游请求的超时（毫秒）

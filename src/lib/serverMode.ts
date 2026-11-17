@@ -14,8 +14,11 @@ export interface ServerConfig {
   /** 部署端建议的默认模型 ID，留空时前端使用内置默认值 */
   model?: string
   agnesModel?: string
+  /** secret 渠道模型，留空时沿用 model */
+  secretModel?: string
   openaiEnabled?: boolean
   agnesEnabled?: boolean
+  secretEnabled?: boolean
 }
 
 /** 服务端模式下前端使用的占位 Key，请求会经 Worker 转发，实际鉴权由服务端注入 */
@@ -29,8 +32,10 @@ const CONFIG_ENDPOINT = '/api/server-config'
 const SESSION_ENDPOINT = '/api/session'
 const SERVER_PROFILE_ID = 'default-openai'
 const SERVER_AGNES_PROFILE_ID = 'default-agnes'
+const SERVER_SECRET_PROFILE_ID = 'default-secret'
 const SERVER_PROFILE_NAME = '部署端配置'
 const SERVER_AGNES_PROFILE_NAME = 'Agnes Image'
+const SERVER_SECRET_PROFILE_NAME = 'secret'
 const SERVER_PROFILE_MODEL = 'gpt-image-1'
 const SERVER_AGNES_PROFILE_MODEL = 'agnes-image-2.5-flash'
 
@@ -66,8 +71,10 @@ function normalizeServerConfig(input: unknown): ServerConfig | null {
     backgroundJobs: record.backgroundJobs === true,
     openaiEnabled: record.openaiEnabled !== false,
     agnesEnabled: record.agnesEnabled === true,
+    secretEnabled: record.secretEnabled === true,
     ...(typeof record.model === 'string' && record.model.trim() ? { model: record.model.trim() } : {}),
     ...(typeof record.agnesModel === 'string' && record.agnesModel.trim() ? { agnesModel: record.agnesModel.trim() } : {}),
+    ...(typeof record.secretModel === 'string' && record.secretModel.trim() ? { secretModel: record.secretModel.trim() } : {}),
   }
 }
 
@@ -161,14 +168,21 @@ export function isAgnesServerProfile(profileId?: string) {
   return profileId === SERVER_AGNES_PROFILE_ID
 }
 
-export function createServerPresetConfig(config?: Pick<ServerConfig, 'model' | 'agnesModel' | 'openaiEnabled' | 'agnesEnabled'> | string) {
+export function isSecretServerProfile(profileId?: string) {
+  return profileId === SERVER_SECRET_PROFILE_ID
+}
+
+export function createServerPresetConfig(config?: Pick<ServerConfig, 'model' | 'agnesModel' | 'secretModel' | 'openaiEnabled' | 'agnesEnabled' | 'secretEnabled'> | string) {
   const resolved = typeof config === 'string' || config === undefined
-    ? { model: config, openaiEnabled: true, agnesEnabled: false }
+    ? { model: config, openaiEnabled: true, agnesEnabled: false, secretEnabled: false }
     : config
   const openaiEnabled = resolved.openaiEnabled !== false
   const agnesEnabled = resolved.agnesEnabled === true
+  const secretEnabled = resolved.secretEnabled === true
   const openaiModel = resolved.model?.trim() || SERVER_PROFILE_MODEL
   const agnesModel = resolved.agnesModel?.trim() || SERVER_AGNES_PROFILE_MODEL
+  // secret 渠道和渠道 1 同模型，留空时直接复用
+  const secretModel = resolved.secretModel?.trim() || openaiModel
   const profiles = [
     ...(openaiEnabled ? [{
       id: SERVER_PROFILE_ID,
@@ -199,6 +213,21 @@ export function createServerPresetConfig(config?: Pick<ServerConfig, 'model' | '
       codexCli: false,
       transparentBackgroundMethod: 'api' as const,
       isDefault: !openaiEnabled,
+    }] : []),
+    ...(secretEnabled ? [{
+      id: SERVER_SECRET_PROFILE_ID,
+      name: SERVER_SECRET_PROFILE_NAME,
+      provider: 'openai' as const,
+      baseUrl: '',
+      apiKey: SERVICE_MANAGED_API_KEY,
+      model: secretModel,
+      imageGenerationModel: secretModel,
+      timeout: 600,
+      apiMode: 'images' as const,
+      apiProxy: true,
+      codexCli: false,
+      transparentBackgroundMethod: 'api' as const,
+      isDefault: !openaiEnabled && !agnesEnabled,
     }] : []),
   ]
   return { customProviders: [], profiles }

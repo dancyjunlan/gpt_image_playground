@@ -2,7 +2,7 @@ import { DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type CustomProviderDefi
 import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob } from './canvasImage'
 import { blobToDataUrl } from './dataUrl'
 import { buildApiUrl, createServerModeHeaders, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
-import { isAgnesServerProfile, isBackgroundJobsEnabled, isServerMode } from './serverMode'
+import { isAgnesServerProfile, isBackgroundJobsEnabled, isSecretServerProfile, isServerMode } from './serverMode'
 import {
   assertImageInputPayloadSize,
   assertMaskEditFileSize,
@@ -515,7 +515,9 @@ async function callServerBackgroundJob(opts: CallApiOptions, profile: ApiProfile
     headers['Content-Type'] = 'application/json'
   }
 
-  const protocol = isAgnesServerProfile(profile.id) ? 'agnes' : 'openai'
+  const protocol = isAgnesServerProfile(profile.id)
+    ? 'agnes'
+    : isSecretServerProfile(profile.id) ? 'secret' : 'openai'
   const upstreamPath = protocol === 'agnes' || !isEdit ? 'images/generations' : 'images/edits'
   const submit = await apiFetch(`/api/jobs?protocol=${protocol}&upstream=${encodeURIComponent(upstreamPath)}`, {
     method: 'POST',
