@@ -5,9 +5,11 @@ import {
   SERVICE_MANAGED_API_KEY,
   createServerPresetConfig,
   getDirectCredentials,
-  isDirectServerProfile,
+  isDirectModeEnabled,
   isServerManagedKey,
+  lockDirectAccess,
   loadServerConfig,
+  setDirectModeEnabled,
   unlockDirectAccess,
 } from './serverMode'
 
@@ -99,18 +101,18 @@ describe('serverMode', () => {
       })
       expect(getDirectCredentials()?.apiKey).toBe('sk-direct')
 
+      // 直连不再依赖额外配置项，而是由开关控制
+      expect(isDirectModeEnabled()).toBe(false)
+      setDirectModeEnabled(true)
+      expect(isDirectModeEnabled()).toBe(true)
+
       const preset = createServerPresetConfig({ model: 'gpt-image-1', openaiEnabled: true })
-      const direct = preset.profiles.find((profile) => profile.id === 'default-direct')
-      expect(direct).toMatchObject({
-        baseUrl: 'https://upstream.example.com/v1',
-        apiKey: 'sk-direct',
-        apiProxy: false,
-      })
-      expect(isDirectServerProfile(direct?.id)).toBe(true)
-      // 直连配置无论代理开关如何都不走 Worker
-      expect(shouldUseApiProxy(true, null, { id: 'default-direct', baseUrl: 'https://upstream.example.com/v1' })).toBe(false)
-      // 合并过程中即使 id 丢失，只要带真实地址也按直连处理
+      expect(preset.profiles.some((profile) => profile.id === 'default-direct')).toBe(false)
+      // 带真实地址的配置一律不走代理，避免合并后 id 丢失导致又走 Worker
       expect(shouldUseApiProxy(true, null, { baseUrl: 'https://upstream.example.com/v1' })).toBe(false)
+      lockDirectAccess()
+      expect(getDirectCredentials()).toBeNull()
+      expect(isDirectModeEnabled()).toBe(false)
     } finally {
       globalThis.fetch = originalFetch
       vi.unstubAllGlobals()

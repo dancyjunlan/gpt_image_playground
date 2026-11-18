@@ -2,7 +2,7 @@ import { DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type CustomProviderDefi
 import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob } from './canvasImage'
 import { blobToDataUrl } from './dataUrl'
 import { buildApiUrl, createServerModeHeaders, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
-import { getDirectCredentials, isAgnesServerProfile, isBackgroundJobsEnabled, isDirectCredentialsProfile, isSecretServerProfile, isServerMode } from './serverMode'
+import { getDirectCredentials, isAgnesServerProfile, isBackgroundJobsEnabled, isDirectCredentialsProfile, isDirectModeEnabled, isSecretServerProfile, isServerMode } from './serverMode'
 import {
   assertImageInputPayloadSize,
   assertMaskEditFileSize,
@@ -107,6 +107,19 @@ function createRequestHeaders(profile: ApiProfile): Record<string, string> {
 
 function isRecordValue(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+/** 直连开关打开时，把选中配置的地址和密钥换成部署端下发的那一份 */
+function applyDirectModeOverride(profile: ApiProfile): ApiProfile {
+  if (!isDirectModeEnabled()) return profile
+  const credentials = getDirectCredentials()
+  if (!credentials) return profile
+  return {
+    ...profile,
+    baseUrl: credentials.baseUrl,
+    apiKey: credentials.apiKey,
+    apiProxy: false,
+  }
 }
 
 function getStringValue(source: Record<string, unknown>, key: string): string | undefined {
@@ -569,6 +582,11 @@ async function callServerBackgroundJob(opts: CallApiOptions, profile: ApiProfile
 }
 
 export async function callOpenAICompatibleImageApi(opts: CallApiOptions, profile: ApiProfile, customProvider?: CustomProviderDefinition | null): Promise<CallApiResult> {
+  // 直连开关打开时，用本机保存的凭据替换地址和密钥，请求不再经过 Worker
+  if (isDirectModeEnabled() && !customProvider) {
+    return callImagesApi(opts, applyDirectModeOverride(profile))
+  }
+
   // 部署端启用了后台任务时统一走「提交 → 轮询」，浏览器不再保持长连接。
   // 直连配置由浏览器直接请求上游，不经过 Worker，因此也不走后台任务。
   if (!customProvider && isBackgroundJobsEnabled() && !isDirectCredentialsProfile(profile)) {

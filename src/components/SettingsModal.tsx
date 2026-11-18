@@ -6,7 +6,7 @@ import { customProviderSupportsNativeTransparentBackground } from '../lib/custom
 import { hasActiveDataOperations, trackDataTransfer } from '../lib/dataOperations'
 import { useSettingsDataTransfer } from '../lib/dataProgress'
 import { isApiProxyAvailable, isApiProxyLocked, readClientDevProxyConfig } from '../lib/devProxy'
-import { isServerMode, isDirectAccessAvailable, isDirectServerProfile, getDirectCredentials, getServerConfig, unlockDirectAccess, lockDirectAccess, isAgnesServerProfile, isSecretServerProfile } from '../lib/serverMode'
+import { isServerMode, isDirectAccessAvailable, getDirectCredentials, unlockDirectAccess, lockDirectAccess, isDirectModeEnabled, setDirectModeEnabled, isAgnesServerProfile, isSecretServerProfile } from '../lib/serverMode'
 import { isTauri } from '../lib/platform'
 import { useStore, exportData, importData, clearData, type SettingsTab } from '../store'
 import {
@@ -40,9 +40,7 @@ import {
   isPresetProviderDeletionPrevented,
   isPresetProfileLocked,
   isPresetProviderLocked,
-  setPresetConfig,
 } from '../lib/presetConfig'
-import { createServerPresetConfig } from '../lib/serverMode'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { createCustomProfileImportUrl } from '../lib/profileImportUrl'
 import { getProfileImportBaseUrl, handledImportLinks } from '../lib/importLink'
@@ -238,6 +236,7 @@ export default function SettingsModal() {
   const [directError, setDirectError] = useState('')
   const directAccessAvailable = isServerMode() && isDirectAccessAvailable()
   const directUnlocked = Boolean(getDirectCredentials())
+  const [directOn, setDirectOn] = useState(isDirectModeEnabled())
 
   const apiProxyConfig = readClientDevProxyConfig()
   const apiProxyAvailable = isApiProxyAvailable(apiProxyConfig)
@@ -451,17 +450,9 @@ export default function SettingsModal() {
         : isSecretServerProfile(activeProfile.id) ? 'secret' : 'openai'
       await unlockDirectAccess(directPassword.trim(), protocol)
       setDirectPassword('')
-      // 重建预置配置，让带真实凭据的直连配置立即出现在列表里，并直接切过去
-      const presetConfig = createServerPresetConfig(getServerConfig() ?? undefined)
-      setPresetConfig(presetConfig)
-      await useStore.getState().setPresetImportedSettings(presetConfig, (settings) => ({
-        activeProfileId: settings.profiles.some((profile) => isDirectServerProfile(profile.id))
-          ? 'default-direct'
-          : settings.activeProfileId,
-      }))
-      const nextState = useStore.getState()
-      draftSourceRef.current = nextState.settings
-      setDraft(nextState.settings)
+      // 解锁后直接打开直连开关，不再依赖切换配置
+      setDirectModeEnabled(true)
+      setDirectOn(true)
     } catch (err) {
       setDirectError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -469,21 +460,15 @@ export default function SettingsModal() {
     }
   }
 
-  const handleLockDirect = async () => {
+  const handleToggleDirect = (enabled: boolean) => {
+    setDirectModeEnabled(enabled)
+    setDirectOn(enabled)
+  }
+
+  const handleLockDirect = () => {
     lockDirectAccess()
-    const presetConfig = createServerPresetConfig(getServerConfig() ?? undefined)
-    setPresetConfig(presetConfig)
-    // 退出直连时把这条配置从设置里删掉，并回到仍然存在的渠道
-    await useStore.getState().setPresetImportedSettings(presetConfig, (settings) => {
-      const profiles = settings.profiles.filter((profile) => !isDirectServerProfile(profile.id))
-      const activeProfileId = profiles.some((profile) => profile.id === settings.activeProfileId)
-        ? settings.activeProfileId
-        : profiles[0]?.id ?? settings.activeProfileId
-      return { profiles, activeProfileId }
-    })
-    const nextState = useStore.getState()
-    draftSourceRef.current = nextState.settings
-    setDraft(nextState.settings)
+    setDirectOn(false)
+    setDirectPassword('')
   }
 
   const commitSettings = (nextDraft: AppSettings) => {
@@ -1567,15 +1552,30 @@ export default function SettingsModal() {
                   </div>
                   {directUnlocked ? (
                     <>
+                      <div className="mb-1.5 flex items-center justify-between">
+                        <span className="text-xs text-gray-500 dark:text-gray-500">浏览器直接请求上游</span>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleDirect(!directOn)}
+                          className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${directOn ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                          role="switch"
+                          aria-checked={directOn}
+                          aria-label="启用直连"
+                        >
+                          <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${directOn ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+                        </button>
+                      </div>
                       <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                        已在本机保存上游凭据，选择「直连（本机密钥）」配置后，请求由浏览器直接发往上游，不经过 Worker，适合参考图多、容易 524 的情况。
+                        {directOn
+                          ? '直连已启用：请求由浏览器直接发往上游，不经过 Worker，生成期间请勿关闭页面。'
+                          : '直连已关闭：请求仍经 Worker 转发。参考图多、容易 524 时可打开。'}
                       </div>
                       <button
                         type="button"
-                        onClick={() => { void handleLockDirect() }}
+                        onClick={handleLockDirect}
                         className="mt-2 rounded-lg bg-black/[0.06] px-2.5 py-1 text-xs text-gray-600 transition hover:bg-black/[0.1] dark:bg-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.12]"
                       >
-                        退出直连并清除本机密钥
+                        清除本机密钥
                       </button>
                     </>
                   ) : (

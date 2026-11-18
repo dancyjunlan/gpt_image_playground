@@ -180,6 +180,25 @@ export function isDirectAccessAvailable() {
   return Boolean(cached?.directAccessAvailable)
 }
 
+/** 直连开关是否打开（打开后请求直接用本机保存的凭据，与选中的配置无关） */
+export function isDirectModeEnabled() {
+  return Boolean(getDirectCredentials()) && readDirectFlag()
+}
+
+const DIRECT_FLAG_KEY = 'gpt-image-direct-enabled'
+
+function readDirectFlag() {
+  try {
+    return localStorage.getItem(DIRECT_FLAG_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function setDirectModeEnabled(enabled: boolean) {
+  writeStorage(DIRECT_FLAG_KEY, enabled ? '1' : null)
+}
+
 export function getDirectCredentials(): DirectCredentials | null {
   try {
     const raw = localStorage.getItem(DIRECT_STORAGE_KEY)
@@ -225,6 +244,7 @@ export async function unlockDirectAccess(password: string, protocol: 'openai' | 
 /** 退出直连，浏览器里保存的凭据一并清除 */
 export function lockDirectAccess() {
   writeStorage(DIRECT_STORAGE_KEY, null)
+  writeStorage(DIRECT_FLAG_KEY, null)
 }
 
 export function isDirectServerProfile(profileId?: string) {
@@ -265,8 +285,6 @@ export function createServerPresetConfig(config?: Pick<ServerConfig, 'model' | '
   const agnesModel = resolved.agnesModel?.trim() || SERVER_AGNES_PROFILE_MODEL
   // secret 渠道和渠道 1 同模型，留空时直接复用
   const secretModel = resolved.secretModel?.trim() || openaiModel
-  // 只有本机存过直连凭据，才下发直连配置
-  const direct = getDirectCredentials()
   const profiles = [
     ...(openaiEnabled ? [{
       id: SERVER_PROFILE_ID,
@@ -312,22 +330,6 @@ export function createServerPresetConfig(config?: Pick<ServerConfig, 'model' | '
       codexCli: false,
       transparentBackgroundMethod: 'api' as const,
       isDefault: !openaiEnabled && !agnesEnabled,
-    }] : []),
-    // 已验证直连密码时，额外给出一条带真实地址和密钥的配置：请求由浏览器直接发往上游
-    ...(direct ? [{
-      id: SERVER_DIRECT_PROFILE_ID,
-      name: SERVER_DIRECT_PROFILE_NAME,
-      provider: 'openai' as const,
-      baseUrl: direct.baseUrl,
-      apiKey: direct.apiKey,
-      model: direct.protocol === 'agnes' ? agnesModel : openaiModel,
-      imageGenerationModel: direct.protocol === 'agnes' ? agnesModel : openaiModel,
-      timeout: 600,
-      apiMode: 'images' as const,
-      apiProxy: false,
-      codexCli: false,
-      transparentBackgroundMethod: 'api' as const,
-      isDefault: false,
     }] : []),
   ]
   return { customProviders: [], profiles }
