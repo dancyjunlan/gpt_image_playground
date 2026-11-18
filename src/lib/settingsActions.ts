@@ -17,6 +17,7 @@ import {
 } from './apiProfiles'
 import { isApiProxyAvailable, isApiProxyLocked, readClientDevProxyConfig } from './devProxy'
 import { isTauri } from './platform'
+import { isDirectServerProfile } from './serverMode'
 import {
   getDefaultPresetBaseUrl,
   getDefaultPresetProfileId,
@@ -53,7 +54,11 @@ export function prepareSettingsForCommit(draft: AppSettings): AppSettings {
   const apiProxyLocked = isApiProxyLocked(proxyConfig)
   const defaultProfileId = getDefaultPresetProfileId() ?? getDefaultApiProfileId(draft)
   const profiles = draft.profiles.map((profile) => {
-    const nextApiProxy = isProfileApiProxyEligible(draft, profile) && apiProxyAvailable ? (apiProxyLocked || profile.apiProxy) : false
+    // 直连配置要绕过 Worker，不能被部署端的代理锁定改回开启
+    const directProfile = isDirectServerProfile(profile.id)
+    const nextApiProxy = directProfile
+      ? false
+      : isProfileApiProxyEligible(draft, profile) && apiProxyAvailable ? (apiProxyLocked || profile.apiProxy) : false
     const shouldKeepEmptyBaseUrl = profile.provider !== 'fal' && nextApiProxy && !profile.baseUrl.trim()
     const emptyBaseUrlFallback = profile.id === defaultProfileId
       ? getDefaultPresetBaseUrl()

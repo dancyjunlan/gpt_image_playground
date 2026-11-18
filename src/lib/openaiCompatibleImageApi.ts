@@ -2,7 +2,7 @@ import { DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type CustomProviderDefi
 import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob } from './canvasImage'
 import { blobToDataUrl } from './dataUrl'
 import { buildApiUrl, createServerModeHeaders, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
-import { getDirectCredentials, isAgnesServerProfile, isBackgroundJobsEnabled, isDirectServerProfile, isSecretServerProfile, isServerMode } from './serverMode'
+import { getDirectCredentials, isAgnesServerProfile, isBackgroundJobsEnabled, isDirectCredentialsProfile, isSecretServerProfile, isServerMode } from './serverMode'
 import {
   assertImageInputPayloadSize,
   assertMaskEditFileSize,
@@ -93,7 +93,7 @@ function normalizeImageApiPayload(value: unknown): ImageApiResponse {
 
 function createRequestHeaders(profile: ApiProfile): Record<string, string> {
   // 直连配置携带真实上游密钥，按渠道的鉴权方式发送
-  if (isDirectServerProfile(profile.id)) {
+  if (isDirectCredentialsProfile(profile)) {
     const credentials = getDirectCredentials()
     if (credentials?.authHeader === 'apikey') return { 'X-Api-Key': profile.apiKey }
     return { Authorization: `Bearer ${profile.apiKey}` }
@@ -571,7 +571,7 @@ async function callServerBackgroundJob(opts: CallApiOptions, profile: ApiProfile
 export async function callOpenAICompatibleImageApi(opts: CallApiOptions, profile: ApiProfile, customProvider?: CustomProviderDefinition | null): Promise<CallApiResult> {
   // 部署端启用了后台任务时统一走「提交 → 轮询」，浏览器不再保持长连接。
   // 直连配置由浏览器直接请求上游，不经过 Worker，因此也不走后台任务。
-  if (!customProvider && isBackgroundJobsEnabled() && !isDirectServerProfile(profile.id)) {
+  if (!customProvider && isBackgroundJobsEnabled() && !isDirectCredentialsProfile(profile)) {
     return callServerBackgroundJob(opts, profile)
   }
 
@@ -631,7 +631,7 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile): P
   const isEdit = inputImageDataUrls.length > 0
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
-  const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig, profile.id)
+  const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig, profile)
   const requestHeaders = createRequestHeaders(profile)
   const paths = createOpenAICompatiblePaths()
 
@@ -1076,7 +1076,7 @@ async function callCustomHttpImageApi(opts: CallApiOptions, profile: ApiProfile,
 
   try {
     const proxyConfig = readClientDevProxyConfig()
-    const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig, profile.id)
+    const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig, profile)
     const submitMapping = isEdit && customProvider.editSubmit ? customProvider.editSubmit : customProvider.submit
     if (useApiProxy && (submitMapping.method ?? 'POST') !== 'POST') {
       throw new Error('API 代理暂不支持使用 GET 提交的自定义服务商。请关闭 API 代理，或改用 POST 提交的自定义服务商配置。')
@@ -1172,7 +1172,7 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
     : prompt
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
-  const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig, profile.id)
+  const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig, profile)
   const requestHeaders = createRequestHeaders(profile)
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(createRequestTimeoutError(profile.timeout)), profile.timeout * 1000)

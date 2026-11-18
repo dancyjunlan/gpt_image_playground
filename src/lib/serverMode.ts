@@ -232,6 +232,17 @@ export function isDirectServerProfile(profileId?: string) {
 }
 
 /**
+ * 是否为直连配置。
+ * 服务端模式下所有预置配置的 baseUrl 都是空的（走代理），
+ * 只有直连配置带真实地址，所以这里同时按 id 和 baseUrl 判断，避免合并后 id 丢失。
+ */
+export function isDirectCredentialsProfile(profile?: { id?: string; baseUrl?: string } | null) {
+  if (!profile) return false
+  if (profile.id === SERVER_DIRECT_PROFILE_ID) return true
+  return Boolean(cached?.serverMode && profile.baseUrl && profile.baseUrl.trim())
+}
+
+/**
  * 服务端模式下的预置配置：API 配置全部来自部署端，前端只保留一个占位配置，
  * 用户无需也无法填写地址与密钥。地址留空，因为代理开启时地址不参与拼接。
  */

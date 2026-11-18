@@ -114,9 +114,9 @@ export function enforcePresetConfigPolicy(
     if (!preset) return profile.isDefault ? { ...profile, isDefault: undefined } : profile
     return {
       ...(paramsLocked ? preset : profile),
-      // 直连配置的密钥和地址由解锁流程写入，必须保留，不能退回占位值
+      // 直连配置的密钥、地址和代理开关由解锁流程写入，必须保留，不能退回占位值
       ...(paramsLocked && isDirectServerProfile(profile.id)
-        ? { apiKey: profile.apiKey, baseUrl: profile.baseUrl }
+        ? { apiKey: profile.apiKey, baseUrl: profile.baseUrl, apiProxy: false }
         : { apiKey: profile.apiKey }),
       selectedModel: profile.selectedModel,
       provider: paramsLocked || presetConfigOnly ? preset.provider : profile.provider,

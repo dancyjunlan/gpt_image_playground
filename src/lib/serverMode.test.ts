@@ -108,7 +108,9 @@ describe('serverMode', () => {
       })
       expect(isDirectServerProfile(direct?.id)).toBe(true)
       // 直连配置无论代理开关如何都不走 Worker
-      expect(shouldUseApiProxy(true, null, 'default-direct')).toBe(false)
+      expect(shouldUseApiProxy(true, null, { id: 'default-direct', baseUrl: 'https://upstream.example.com/v1' })).toBe(false)
+      // 合并过程中即使 id 丢失，只要带真实地址也按直连处理
+      expect(shouldUseApiProxy(true, null, { baseUrl: 'https://upstream.example.com/v1' })).toBe(false)
     } finally {
       globalThis.fetch = originalFetch
       vi.unstubAllGlobals()
