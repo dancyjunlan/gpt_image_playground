@@ -451,10 +451,14 @@ export default function SettingsModal() {
         : isSecretServerProfile(activeProfile.id) ? 'secret' : 'openai'
       await unlockDirectAccess(directPassword.trim(), protocol)
       setDirectPassword('')
-      // 重建预置配置，让带真实凭据的直连配置立即出现在列表里
+      // 重建预置配置，让带真实凭据的直连配置立即出现在列表里，并直接切过去
       const presetConfig = createServerPresetConfig(getServerConfig() ?? undefined)
       setPresetConfig(presetConfig)
-      await useStore.getState().setPresetImportedSettings(presetConfig)
+      await useStore.getState().setPresetImportedSettings(presetConfig, (settings) => ({
+        activeProfileId: settings.profiles.some((profile) => isDirectServerProfile(profile.id))
+          ? 'default-direct'
+          : settings.activeProfileId,
+      }))
       const nextState = useStore.getState()
       draftSourceRef.current = nextState.settings
       setDraft(nextState.settings)
