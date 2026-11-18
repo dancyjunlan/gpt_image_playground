@@ -313,6 +313,7 @@ npx wrangler secret put UPSTREAM_API_KEY      # 上游 API Key
 | `SECRET_API_KEY` | secret 渠道 API Key，建议用 `wrangler secret put SECRET_API_KEY` 写入 |
 | `SECRET_AUTH_HEADER` | secret 渠道鉴权头，默认 `bearer` |
 | `SECRET_IMAGE_MODEL` | secret 渠道模型，留空时沿用 `DEFAULT_IMAGE_MODEL` |
+| `DIRECT_ACCESS_PASSWORD` | 直连模式密码；设置后可在设置页验证并切换为浏览器直连上游，留空则关闭该功能 |
 | `ACCESS_PASSWORD` | 访问口令，留空表示对所有人开放；设置后页面会先要求验证 |
 | `PROXY_TIMEOUT_MS` | 单次上游请求超时（毫秒），默认 `600000` |
 | `JOB_MAX_ATTEMPTS` | 后台任务失败后的最大尝试次数，默认 `3` |
@@ -337,6 +338,7 @@ npm run deploy:cf
 
 - 服务端模式下 API 配置由部署端提供并锁定，用户只能选模型，不能改地址和 Key。配置了 Agnes 后，设置里会出现独立的「Agnes Image」配置，生图仍走 `POST /v1/images/generations`，Worker 会把 `size`、图生图参考图和 `response_format` 改写成 Agnes 格式。
 - `grok-imagine-image-2.0` 作为默认 OpenAI 兼容上游里的普通模型使用：文生图走 `POST /v1/images/generations`，有参考图走 `POST /v1/images/edits`，不走异步 `/images/tasks`。
+- **直连模式**：配置 `DIRECT_ACCESS_PASSWORD` 后，设置页会出现「直连模式」。输入密码并验证通过，浏览器会从 Worker 取回该渠道的上游地址与密钥，生成一条「直连（本机密钥）」配置。选中它时请求由浏览器直接发往上游，不经过 Worker 和后台任务，适合参考图多、容易触发上游 524 的情况。凭据只存在本机 localStorage，点「退出直连」即清除。注意直连会让浏览器接触真实密钥，只建议在自己信任的设备上使用。
 - 文生图和图生图都会走后台任务：提交后立即返回任务 ID，Durable Object 在后台调用上游，失败会按 5s / 20s / 60s 退避重试。
 - 上游若同样在 Cloudflare 之后仍可能触发 524；后台任务会自动重试，浏览器侧不会一直占着一条长连接。
 

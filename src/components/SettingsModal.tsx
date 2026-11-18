@@ -6,7 +6,7 @@ import { customProviderSupportsNativeTransparentBackground } from '../lib/custom
 import { hasActiveDataOperations, trackDataTransfer } from '../lib/dataOperations'
 import { useSettingsDataTransfer } from '../lib/dataProgress'
 import { isApiProxyAvailable, isApiProxyLocked, readClientDevProxyConfig } from '../lib/devProxy'
-import { isServerMode } from '../lib/serverMode'
+import { isServerMode, isDirectAccessAvailable, isDirectServerProfile, getDirectCredentials, getServerConfig, unlockDirectAccess, lockDirectAccess, isAgnesServerProfile, isSecretServerProfile } from '../lib/serverMode'
 import { isTauri } from '../lib/platform'
 import { useStore, exportData, importData, clearData, type SettingsTab } from '../store'
 import {
@@ -40,7 +40,9 @@ import {
   isPresetProviderDeletionPrevented,
   isPresetProfileLocked,
   isPresetProviderLocked,
+  setPresetConfig,
 } from '../lib/presetConfig'
+import { createServerPresetConfig } from '../lib/serverMode'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { createCustomProfileImportUrl } from '../lib/profileImportUrl'
 import { getProfileImportBaseUrl, handledImportLinks } from '../lib/importLink'
@@ -231,6 +233,11 @@ export default function SettingsModal() {
   const profileTouchDragRef = useRef<{ id: string, startX: number, startY: number, moved: boolean } | null>(null)
   const [copyImportUrlProfile, setCopyImportUrlProfile] = useState<ApiProfile | null>(null)
   const [copyImportUrlOptions, setCopyImportUrlOptions] = useState<CopyImportUrlOptions>(readCopyImportUrlOptions)
+  const [directPassword, setDirectPassword] = useState('')
+  const [directBusy, setDirectBusy] = useState(false)
+  const [directError, setDirectError] = useState('')
+  const directAccessAvailable = isServerMode() && isDirectAccessAvailable()
+  const directUnlocked = Boolean(getDirectCredentials())
 
   const apiProxyConfig = readClientDevProxyConfig()
   const apiProxyAvailable = isApiProxyAvailable(apiProxyConfig)
@@ -431,6 +438,48 @@ export default function SettingsModal() {
       window.clearTimeout(duplicateProfileTooltipTimerRef.current)
       duplicateProfileTooltipTimerRef.current = null
     }
+  }
+
+  const handleUnlockDirect = async () => {
+    if (!directPassword.trim() || directBusy) return
+    setDirectBusy(true)
+    setDirectError('')
+    try {
+      // 直连哪一套渠道，跟随当前选中的预置配置
+      const protocol = isAgnesServerProfile(activeProfile.id)
+        ? 'agnes'
+        : isSecretServerProfile(activeProfile.id) ? 'secret' : 'openai'
+      await unlockDirectAccess(directPassword.trim(), protocol)
+      setDirectPassword('')
+      // 重建预置配置，让带真实凭据的直连配置立即出现在列表里
+      const presetConfig = createServerPresetConfig(getServerConfig() ?? undefined)
+      setPresetConfig(presetConfig)
+      await useStore.getState().setPresetImportedSettings(presetConfig)
+      const nextState = useStore.getState()
+      draftSourceRef.current = nextState.settings
+      setDraft(nextState.settings)
+    } catch (err) {
+      setDirectError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDirectBusy(false)
+    }
+  }
+
+  const handleLockDirect = async () => {
+    lockDirectAccess()
+    const presetConfig = createServerPresetConfig(getServerConfig() ?? undefined)
+    setPresetConfig(presetConfig)
+    // 退出直连时把这条配置从设置里删掉，并回到仍然存在的渠道
+    await useStore.getState().setPresetImportedSettings(presetConfig, (settings) => {
+      const profiles = settings.profiles.filter((profile) => !isDirectServerProfile(profile.id))
+      const activeProfileId = profiles.some((profile) => profile.id === settings.activeProfileId)
+        ? settings.activeProfileId
+        : profiles[0]?.id ?? settings.activeProfileId
+      return { profiles, activeProfileId }
+    })
+    const nextState = useStore.getState()
+    draftSourceRef.current = nextState.settings
+    setDraft(nextState.settings)
   }
 
   const commitSettings = (nextDraft: AppSettings) => {
@@ -1500,6 +1549,58 @@ export default function SettingsModal() {
                   <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
                     {apiProxyLocked ? '部署端已锁定代理开启，请求经服务器转发到上游 API，上方 URL 设置将失效。' : '开启后请求经服务器转发到上游 API，可绕过浏览器跨域限制，上方 URL 设置将失效。'}
                   </div>
+                </div>
+              )}
+
+              {/* 4.5 直连模式：验证密码后由浏览器直接请求上游 */}
+              {directAccessAvailable && (
+                <div className="block rounded-xl border border-black/[0.06] p-3 dark:border-white/[0.08]">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="block text-sm text-gray-600 dark:text-gray-300">直连模式</span>
+                    <span className={`text-xs ${directUnlocked ? 'text-green-600 dark:text-green-500' : 'text-gray-500 dark:text-gray-500'}`}>
+                      {directUnlocked ? '已解锁' : '未解锁'}
+                    </span>
+                  </div>
+                  {directUnlocked ? (
+                    <>
+                      <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
+                        已在本机保存上游凭据，选择「直连（本机密钥）」配置后，请求由浏览器直接发往上游，不经过 Worker，适合参考图多、容易 524 的情况。
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => { void handleLockDirect() }}
+                        className="mt-2 rounded-lg bg-black/[0.06] px-2.5 py-1 text-xs text-gray-600 transition hover:bg-black/[0.1] dark:bg-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.12]"
+                      >
+                        退出直连并清除本机密钥
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex gap-2">
+                        <input
+                          type="password"
+                          value={directPassword}
+                          onChange={(e) => setDirectPassword(e.target.value)}
+                          placeholder="直连密码"
+                          className="min-w-0 flex-1 rounded-lg border border-transparent bg-black/[0.04] px-2.5 py-1.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => { void handleUnlockDirect() }}
+                          disabled={directBusy || !directPassword.trim()}
+                          className="rounded-lg bg-blue-500 px-3 py-1.5 text-sm text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {directBusy ? '验证中…' : '解锁'}
+                        </button>
+                      </div>
+                      {directError && (
+                        <div className="mt-1.5 text-xs text-red-600 dark:text-red-400">{directError}</div>
+                      )}
+                      <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
+                        输入部署端配置的直连密码后可切换为浏览器直连。密钥只会保存在本机浏览器，退出直连时自动清除。
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 

@@ -19,6 +19,16 @@ export interface ServerConfig {
   openaiEnabled?: boolean
   agnesEnabled?: boolean
   secretEnabled?: boolean
+  /** 部署端允许在设置页输入密码后切换浏览器直连 */
+  directAccessAvailable?: boolean
+}
+
+/** 直连模式下浏览器保存的上游凭据，仅在本机 localStorage 中 */
+export interface DirectCredentials {
+  protocol: 'openai' | 'agnes' | 'secret'
+  baseUrl: string
+  apiKey: string
+  authHeader: 'bearer' | 'apikey'
 }
 
 /** 服务端模式下前端使用的占位 Key，请求会经 Worker 转发，实际鉴权由服务端注入 */
@@ -28,14 +38,18 @@ export const SERVER_PROXY_PREFIX = '/api/proxy'
 
 const STORAGE_KEY = 'gpt-image-server-config'
 const TOKEN_STORAGE_KEY = 'gpt-image-server-token'
+const DIRECT_STORAGE_KEY = 'gpt-image-direct-credentials'
 const CONFIG_ENDPOINT = '/api/server-config'
 const SESSION_ENDPOINT = '/api/session'
+const DIRECT_ENDPOINT = '/api/direct-credentials'
 const SERVER_PROFILE_ID = 'default-openai'
 const SERVER_AGNES_PROFILE_ID = 'default-agnes'
 const SERVER_SECRET_PROFILE_ID = 'default-secret'
+const SERVER_DIRECT_PROFILE_ID = 'default-direct'
 const SERVER_PROFILE_NAME = '部署端配置'
 const SERVER_AGNES_PROFILE_NAME = 'Agnes Image'
 const SERVER_SECRET_PROFILE_NAME = 'secret'
+const SERVER_DIRECT_PROFILE_NAME = '直连（本机密钥）'
 const SERVER_PROFILE_MODEL = 'gpt-image-1'
 const SERVER_AGNES_PROFILE_MODEL = 'agnes-image-2.5-flash'
 
@@ -72,6 +86,7 @@ function normalizeServerConfig(input: unknown): ServerConfig | null {
     openaiEnabled: record.openaiEnabled !== false,
     agnesEnabled: record.agnesEnabled === true,
     secretEnabled: record.secretEnabled === true,
+    directAccessAvailable: record.directAccessAvailable === true,
     ...(typeof record.model === 'string' && record.model.trim() ? { model: record.model.trim() } : {}),
     ...(typeof record.agnesModel === 'string' && record.agnesModel.trim() ? { agnesModel: record.agnesModel.trim() } : {}),
     ...(typeof record.secretModel === 'string' && record.secretModel.trim() ? { secretModel: record.secretModel.trim() } : {}),
@@ -160,6 +175,62 @@ export function isBackgroundJobsEnabled() {
   return Boolean(cached?.backgroundJobs)
 }
 
+/** 部署端是否允许切换直连 */
+export function isDirectAccessAvailable() {
+  return Boolean(cached?.directAccessAvailable)
+}
+
+export function getDirectCredentials(): DirectCredentials | null {
+  try {
+    const raw = localStorage.getItem(DIRECT_STORAGE_KEY)
+    if (!raw) return null
+    const record = JSON.parse(raw) as Partial<DirectCredentials>
+    if (typeof record.baseUrl !== 'string' || !record.baseUrl.trim()) return null
+    if (typeof record.apiKey !== 'string' || !record.apiKey.trim()) return null
+    return {
+      protocol: record.protocol === 'agnes' || record.protocol === 'secret' ? record.protocol : 'openai',
+      baseUrl: record.baseUrl.trim(),
+      apiKey: record.apiKey.trim(),
+      authHeader: record.authHeader === 'apikey' ? 'apikey' : 'bearer',
+    }
+  } catch {
+    return null
+  }
+}
+
+/** 输入直连密码，验证通过后把上游凭据保存在本机，并返回它 */
+export async function unlockDirectAccess(password: string, protocol: 'openai' | 'agnes' | 'secret' = 'openai') {
+  const response = await fetch(DIRECT_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password, protocol }),
+    cache: 'no-store',
+  })
+  const payload = await response.json().catch(() => ({})) as Partial<DirectCredentials> & { ok?: boolean; error?: { message?: string } }
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.error?.message || `验证失败（HTTP ${response.status}）`)
+  }
+  if (!payload.baseUrl || !payload.apiKey) throw new Error('部署端没有返回可用的上游凭据')
+
+  const credentials: DirectCredentials = {
+    protocol: payload.protocol === 'agnes' || payload.protocol === 'secret' ? payload.protocol : 'openai',
+    baseUrl: payload.baseUrl,
+    apiKey: payload.apiKey,
+    authHeader: payload.authHeader === 'apikey' ? 'apikey' : 'bearer',
+  }
+  writeStorage(DIRECT_STORAGE_KEY, JSON.stringify(credentials))
+  return credentials
+}
+
+/** 退出直连，浏览器里保存的凭据一并清除 */
+export function lockDirectAccess() {
+  writeStorage(DIRECT_STORAGE_KEY, null)
+}
+
+export function isDirectServerProfile(profileId?: string) {
+  return profileId === SERVER_DIRECT_PROFILE_ID
+}
+
 /**
  * 服务端模式下的预置配置：API 配置全部来自部署端，前端只保留一个占位配置，
  * 用户无需也无法填写地址与密钥。地址留空，因为代理开启时地址不参与拼接。
@@ -183,6 +254,8 @@ export function createServerPresetConfig(config?: Pick<ServerConfig, 'model' | '
   const agnesModel = resolved.agnesModel?.trim() || SERVER_AGNES_PROFILE_MODEL
   // secret 渠道和渠道 1 同模型，留空时直接复用
   const secretModel = resolved.secretModel?.trim() || openaiModel
+  // 只有本机存过直连凭据，才下发直连配置
+  const direct = getDirectCredentials()
   const profiles = [
     ...(openaiEnabled ? [{
       id: SERVER_PROFILE_ID,
@@ -228,6 +301,22 @@ export function createServerPresetConfig(config?: Pick<ServerConfig, 'model' | '
       codexCli: false,
       transparentBackgroundMethod: 'api' as const,
       isDefault: !openaiEnabled && !agnesEnabled,
+    }] : []),
+    // 已验证直连密码时，额外给出一条带真实地址和密钥的配置：请求由浏览器直接发往上游
+    ...(direct ? [{
+      id: SERVER_DIRECT_PROFILE_ID,
+      name: SERVER_DIRECT_PROFILE_NAME,
+      provider: 'openai' as const,
+      baseUrl: direct.baseUrl,
+      apiKey: direct.apiKey,
+      model: direct.protocol === 'agnes' ? agnesModel : openaiModel,
+      imageGenerationModel: direct.protocol === 'agnes' ? agnesModel : openaiModel,
+      timeout: 600,
+      apiMode: 'images' as const,
+      apiProxy: false,
+      codexCli: false,
+      transparentBackgroundMethod: 'api' as const,
+      isDefault: false,
     }] : []),
   ]
   return { customProviders: [], profiles }

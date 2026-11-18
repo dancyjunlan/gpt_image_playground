@@ -1,6 +1,6 @@
 import { isTauri } from './platform'
 import { readRuntimeEnv } from './runtimeEnv'
-import { getServerConfig, getServerToken, SERVER_PROXY_PREFIX } from './serverMode'
+import { getServerConfig, getServerToken, isDirectServerProfile, SERVER_PROXY_PREFIX } from './serverMode'
 
 export interface DevProxyConfig {
   enabled: boolean
@@ -111,7 +111,13 @@ export function isApiProxyLocked(proxyConfig: DevProxyConfig | null = readClient
   return readRuntimeEnv(import.meta.env.VITE_API_PROXY_LOCKED) === 'true' && isApiProxyAvailable(proxyConfig)
 }
 
-export function shouldUseApiProxy(apiProxy: boolean, proxyConfig: DevProxyConfig | null = readClientDevProxyConfig()): boolean {
+export function shouldUseApiProxy(
+  apiProxy: boolean,
+  proxyConfig: DevProxyConfig | null = readClientDevProxyConfig(),
+  profileId?: string,
+): boolean {
+  // 直连配置由浏览器直接请求上游，任何情况下都不走代理
+  if (profileId && isDirectServerProfile(profileId)) return false
   return isApiProxyAvailable(proxyConfig) && (apiProxy || isApiProxyLocked(proxyConfig))
 }
 

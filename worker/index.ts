@@ -25,6 +25,8 @@ interface Env {
   SECRET_API_KEY?: string
   SECRET_AUTH_HEADER?: string
   SECRET_IMAGE_MODEL?: string
+  /** 直连模式密码；设置后用户可在设置页验证并切换为浏览器直连上游 */
+  DIRECT_ACCESS_PASSWORD?: string
   ACCESS_PASSWORD?: string
   PROXY_TIMEOUT_MS?: string
   JOB_MAX_ATTEMPTS?: string
@@ -107,6 +109,8 @@ function getPublicConfig(env: Env) {
     apiProxyLocked: serverMode,
     // 后台任务模式下浏览器不保持长连接，由 Durable Object 跑完再取结果
     backgroundJobs: serverMode && Boolean(env.IMAGE_JOBS),
+    // 部署端是否允许在设置页验证密码后切换为浏览器直连
+    directAccessAvailable: serverMode && Boolean(readEnv(env.DIRECT_ACCESS_PASSWORD)),
     model: readEnv(env.DEFAULT_IMAGE_MODEL) || undefined,
     agnesModel: readEnv(env.AGNES_IMAGE_MODEL) || undefined,
     // secret 渠道留空时沿用渠道 1 的模型列表
@@ -181,6 +185,46 @@ async function verifySession(request: Request, env: Env) {
     Uint8Array.from(atob(signature.replace(/-/g, '+').replace(/_/g, '/')), (char) => char.charCodeAt(0)),
     new TextEncoder().encode(String(expiresAt)),
   )
+}
+
+/** 直连模式：密码正确才下发上游地址与密钥，供浏览器直接请求上游 */
+async function handleDirectCredentials(request: Request, env: Env) {
+  if (request.method !== 'POST') return json({ error: { message: '请使用 POST' } }, 405)
+
+  const expected = readEnv(env.DIRECT_ACCESS_PASSWORD)
+  if (!expected) return json({ error: { message: '部署端未开启直连模式' } }, 403)
+
+  let submitted = ''
+  let protocol: 'openai' | 'agnes' | 'secret' = 'openai'
+  try {
+    const payload = (await request.json()) as { password?: unknown; protocol?: unknown }
+    submitted = typeof payload?.password === 'string' ? payload.password : ''
+    if (payload?.protocol === 'agnes' || payload?.protocol === 'secret') protocol = payload.protocol
+  } catch {
+    submitted = ''
+  }
+  if (!submitted) return json({ error: { message: '请输入直连密码' } }, 400)
+
+  const [a, b] = await Promise.all([sha256Hex(expected), sha256Hex(submitted)])
+  if (a !== b) return json({ error: { message: '直连密码不正确' } }, 401)
+
+  const channel = protocol === 'agnes'
+    ? { baseUrl: getAgnesBase(env), apiKey: readEnv(env.AGNES_API_KEY), auth: readEnv(env.AGNES_AUTH_HEADER) }
+    : protocol === 'secret'
+      ? { baseUrl: getSecretBase(env), apiKey: readEnv(env.SECRET_API_KEY), auth: readEnv(env.SECRET_AUTH_HEADER) }
+      : { baseUrl: getUpstreamBase(env), apiKey: readEnv(env.UPSTREAM_API_KEY), auth: readEnv(env.UPSTREAM_AUTH_HEADER) }
+
+  if (!channel.baseUrl || !channel.apiKey) {
+    return json({ error: { message: '该渠道未配置地址或密钥，无法直连' } }, 503)
+  }
+
+  return json({
+    ok: true,
+    protocol,
+    baseUrl: channel.baseUrl,
+    apiKey: channel.apiKey,
+    authHeader: channel.auth.toLowerCase() === 'apikey' ? 'apikey' : 'bearer',
+  })
 }
 
 function getProxyTimeout(env: Env) {
@@ -342,6 +386,8 @@ export default {
     }
 
     if (url.pathname === '/api/session') return handleSession(request, env)
+
+    if (url.pathname === '/api/direct-credentials') return handleDirectCredentials(request, env)
 
     if (url.pathname === JOBS_PREFIX || url.pathname.startsWith(`${JOBS_PREFIX}/`)) {
       if (!(await verifySession(request, env))) {

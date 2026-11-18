@@ -1,7 +1,7 @@
 import type { ApiProfile, AppSettings, CustomProviderDefinition, PresetAgentConfig, PresetConfig } from '../types'
 import { getPresetAgentSettings, normalizeSettings } from './apiProfiles'
 import { readRuntimeEnv } from './runtimeEnv'
-import { isServerMode } from './serverMode'
+import { isServerMode, isDirectServerProfile } from './serverMode'
 
 const RAW_SHOW_PRESET_CONFIG_ONLY = readRuntimeEnv(import.meta.env.VITE_SHOW_PRESET_CONFIG_ONLY)
 const SHOW_PRESET_CONFIG_ONLY = (RAW_SHOW_PRESET_CONFIG_ONLY || readRuntimeEnv(import.meta.env.VITE_SHOW_DEFAULT_CONFIG_ONLY)) === 'true'
@@ -114,7 +114,10 @@ export function enforcePresetConfigPolicy(
     if (!preset) return profile.isDefault ? { ...profile, isDefault: undefined } : profile
     return {
       ...(paramsLocked ? preset : profile),
-      apiKey: profile.apiKey,
+      // 直连配置的密钥和地址由解锁流程写入，必须保留，不能退回占位值
+      ...(paramsLocked && isDirectServerProfile(profile.id)
+        ? { apiKey: profile.apiKey, baseUrl: profile.baseUrl }
+        : { apiKey: profile.apiKey }),
       selectedModel: profile.selectedModel,
       provider: paramsLocked || presetConfigOnly ? preset.provider : profile.provider,
       isDefault: profile.id === defaultPresetProfileId ? true : undefined,

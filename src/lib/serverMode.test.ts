@@ -1,11 +1,14 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import { createServerModeHeaders, buildApiUrl } from './devProxy'
+import { createServerModeHeaders, buildApiUrl, shouldUseApiProxy } from './devProxy'
 import {
   SERVICE_MANAGED_API_KEY,
   createServerPresetConfig,
+  getDirectCredentials,
+  isDirectServerProfile,
   isServerManagedKey,
   loadServerConfig,
+  unlockDirectAccess,
 } from './serverMode'
 
 describe('serverMode', () => {
@@ -69,6 +72,47 @@ describe('serverMode', () => {
     })
     expect(preset.profiles).toHaveLength(1)
     expect(preset.profiles[0]).toMatchObject({ id: 'default-secret', isDefault: true })
+  })
+
+  it('解锁直连后保存凭据并生成绕开代理的直连配置', async () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value) },
+      removeItem: (key: string) => { store.delete(key) },
+    })
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (() => Promise.resolve(new Response(JSON.stringify({
+      ok: true,
+      protocol: 'openai',
+      baseUrl: 'https://upstream.example.com/v1',
+      apiKey: 'sk-direct',
+      authHeader: 'bearer',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))) as typeof fetch
+    try {
+      const credentials = await unlockDirectAccess('pass', 'openai')
+      expect(credentials).toEqual({
+        protocol: 'openai',
+        baseUrl: 'https://upstream.example.com/v1',
+        apiKey: 'sk-direct',
+        authHeader: 'bearer',
+      })
+      expect(getDirectCredentials()?.apiKey).toBe('sk-direct')
+
+      const preset = createServerPresetConfig({ model: 'gpt-image-1', openaiEnabled: true })
+      const direct = preset.profiles.find((profile) => profile.id === 'default-direct')
+      expect(direct).toMatchObject({
+        baseUrl: 'https://upstream.example.com/v1',
+        apiKey: 'sk-direct',
+        apiProxy: false,
+      })
+      expect(isDirectServerProfile(direct?.id)).toBe(true)
+      // 直连配置无论代理开关如何都不走 Worker
+      expect(shouldUseApiProxy(true, null, 'default-direct')).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+      vi.unstubAllGlobals()
+    }
   })
 
   it('纯静态部署时读取配置失败并返回 null', async () => {
