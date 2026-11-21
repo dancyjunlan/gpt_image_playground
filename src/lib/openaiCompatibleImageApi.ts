@@ -2,7 +2,7 @@ import { DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type CustomProviderDefi
 import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob } from './canvasImage'
 import { blobToDataUrl } from './dataUrl'
 import { buildApiUrl, createServerModeHeaders, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
-import { getDirectCredentials, isAgnesServerProfile, isBackgroundJobsEnabled, isDirectCredentialsProfile, isDirectModeEnabled, isSecretServerProfile, isServerMode } from './serverMode'
+import { getDirectCredentialsFor, getServerProfileProtocol, isAgnesServerProfile, isBackgroundJobsEnabled, isDirectCredentialsProfile, isDirectModeEnabled, isSecretServerProfile, isServerMode } from './serverMode'
 import {
   assertImageInputPayloadSize,
   assertMaskEditFileSize,
@@ -92,9 +92,9 @@ function normalizeImageApiPayload(value: unknown): ImageApiResponse {
 }
 
 function createRequestHeaders(profile: ApiProfile): Record<string, string> {
-  // 直连配置携带真实上游密钥，按渠道的鉴权方式发送
-  if (isDirectCredentialsProfile(profile)) {
-    const credentials = getDirectCredentials()
+  // 直连时携带真实上游密钥，按该渠道的鉴权方式发送
+  if (isDirectModeEnabled() && isDirectCredentialsProfile(profile)) {
+    const credentials = getDirectCredentialsFor(getServerProfileProtocol(profile.id))
     if (credentials?.authHeader === 'apikey') return { 'X-Api-Key': profile.apiKey }
     return { Authorization: `Bearer ${profile.apiKey}` }
   }
@@ -109,11 +109,17 @@ function isRecordValue(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
-/** 直连开关打开时，把选中配置的地址和密钥换成部署端下发的那一份 */
-function applyDirectModeOverride(profile: ApiProfile): ApiProfile {
-  if (!isDirectModeEnabled()) return profile
-  const credentials = getDirectCredentials()
-  if (!credentials) return profile
+/**
+ * 直连开关打开时，按当前选中的渠道取本机保存的凭据。
+ * 该渠道没有解锁就返回 null，调用方退回 Worker 转发，避免用错地址。
+ * Agnes 依赖 Worker 改写请求体，因此直连不适用。
+ */
+function applyDirectModeOverride(profile: ApiProfile): ApiProfile | null {
+  if (!isDirectModeEnabled()) return null
+  const protocol = getServerProfileProtocol(profile.id)
+  if (protocol === 'agnes') return null
+  const credentials = getDirectCredentialsFor(protocol)
+  if (!credentials) return null
   return {
     ...profile,
     baseUrl: credentials.baseUrl,
@@ -582,10 +588,9 @@ async function callServerBackgroundJob(opts: CallApiOptions, profile: ApiProfile
 }
 
 export async function callOpenAICompatibleImageApi(opts: CallApiOptions, profile: ApiProfile, customProvider?: CustomProviderDefinition | null): Promise<CallApiResult> {
-  // 直连开关打开时，用本机保存的凭据替换地址和密钥，请求不再经过 Worker
-  if (isDirectModeEnabled() && !customProvider) {
-    return callImagesApi(opts, applyDirectModeOverride(profile))
-  }
+  // 直连开关打开时，用当前渠道本机保存的凭据替换地址和密钥，请求不再经过 Worker
+  const directProfile = customProvider ? null : applyDirectModeOverride(profile)
+  if (directProfile) return callImagesApi(opts, directProfile)
 
   // 部署端启用了后台任务时统一走「提交 → 轮询」，浏览器不再保持长连接。
   // 直连配置由浏览器直接请求上游，不经过 Worker，因此也不走后台任务。

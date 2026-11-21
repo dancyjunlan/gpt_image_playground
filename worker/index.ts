@@ -187,7 +187,7 @@ async function verifySession(request: Request, env: Env) {
   )
 }
 
-/** 直连模式：密码正确才下发上游地址与密钥，供浏览器直接请求上游 */
+/** 直连模式：密码正确才下发各渠道的上游地址与密钥，供浏览器直接请求上游 */
 async function handleDirectCredentials(request: Request, env: Env) {
   if (request.method !== 'POST') return json({ error: { message: '请使用 POST' } }, 405)
 
@@ -195,11 +195,9 @@ async function handleDirectCredentials(request: Request, env: Env) {
   if (!expected) return json({ error: { message: '部署端未开启直连模式' } }, 403)
 
   let submitted = ''
-  let protocol: 'openai' | 'agnes' | 'secret' = 'openai'
   try {
-    const payload = (await request.json()) as { password?: unknown; protocol?: unknown }
+    const payload = (await request.json()) as { password?: unknown }
     submitted = typeof payload?.password === 'string' ? payload.password : ''
-    if (payload?.protocol === 'agnes' || payload?.protocol === 'secret') protocol = payload.protocol
   } catch {
     submitted = ''
   }
@@ -208,23 +206,25 @@ async function handleDirectCredentials(request: Request, env: Env) {
   const [a, b] = await Promise.all([sha256Hex(expected), sha256Hex(submitted)])
   if (a !== b) return json({ error: { message: '直连密码不正确' } }, 401)
 
-  const channel = protocol === 'agnes'
-    ? { baseUrl: getAgnesBase(env), apiKey: readEnv(env.AGNES_API_KEY), auth: readEnv(env.AGNES_AUTH_HEADER) }
-    : protocol === 'secret'
-      ? { baseUrl: getSecretBase(env), apiKey: readEnv(env.SECRET_API_KEY), auth: readEnv(env.SECRET_AUTH_HEADER) }
-      : { baseUrl: getUpstreamBase(env), apiKey: readEnv(env.UPSTREAM_API_KEY), auth: readEnv(env.UPSTREAM_AUTH_HEADER) }
-
-  if (!channel.baseUrl || !channel.apiKey) {
-    return json({ error: { message: '该渠道未配置地址或密钥，无法直连' } }, 503)
+  const normalizeAuth = (value: string) => (value.toLowerCase() === 'apikey' ? 'apikey' : 'bearer')
+  const candidates = {
+    openai: { baseUrl: getUpstreamBase(env), apiKey: readEnv(env.UPSTREAM_API_KEY), auth: normalizeAuth(readEnv(env.UPSTREAM_AUTH_HEADER)) },
+    agnes: { baseUrl: getAgnesBase(env), apiKey: readEnv(env.AGNES_API_KEY), auth: normalizeAuth(readEnv(env.AGNES_AUTH_HEADER)) },
+    secret: { baseUrl: getSecretBase(env), apiKey: readEnv(env.SECRET_API_KEY), auth: normalizeAuth(readEnv(env.SECRET_AUTH_HEADER)) },
   }
 
-  return json({
-    ok: true,
-    protocol,
-    baseUrl: channel.baseUrl,
-    apiKey: channel.apiKey,
-    authHeader: channel.auth.toLowerCase() === 'apikey' ? 'apikey' : 'bearer',
-  })
+  // 一次下发全部已配置渠道，切换渠道时直连不用重新解锁
+  const channels: Record<string, { baseUrl: string; apiKey: string; authHeader: string }> = {}
+  for (const [key, channel] of Object.entries(candidates)) {
+    if (!channel.baseUrl || !channel.apiKey) continue
+    channels[key] = { baseUrl: channel.baseUrl, apiKey: channel.apiKey, authHeader: channel.auth }
+  }
+
+  if (!Object.keys(channels).length) {
+    return json({ error: { message: '部署端没有可直连的渠道' } }, 503)
+  }
+
+  return json({ ok: true, channels })
 }
 
 function getProxyTimeout(env: Env) {

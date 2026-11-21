@@ -23,13 +23,16 @@ export interface ServerConfig {
   directAccessAvailable?: boolean
 }
 
-/** 直连模式下浏览器保存的上游凭据，仅在本机 localStorage 中 */
-export interface DirectCredentials {
-  protocol: 'openai' | 'agnes' | 'secret'
+/** 直连模式下浏览器保存的上游凭据，仅在本机 localStorage 中，按渠道分开存 */
+export type DirectProtocol = 'openai' | 'agnes' | 'secret'
+
+export interface DirectChannelCredentials {
   baseUrl: string
   apiKey: string
   authHeader: 'bearer' | 'apikey'
 }
+
+export type DirectCredentials = Partial<Record<DirectProtocol, DirectChannelCredentials>>
 
 /** 服务端模式下前端使用的占位 Key，请求会经 Worker 转发，实际鉴权由服务端注入 */
 export const SERVICE_MANAGED_API_KEY = 'server-managed'
@@ -185,6 +188,25 @@ export function isDirectModeEnabled() {
   return Boolean(getDirectCredentials()) && readDirectFlag()
 }
 
+/** 当前选中的配置属于哪个渠道 */
+export function getServerProfileProtocol(profileId?: string): DirectProtocol {
+  if (isAgnesServerProfile(profileId)) return 'agnes'
+  if (isSecretServerProfile(profileId)) return 'secret'
+  return 'openai'
+}
+
+/** 取某个渠道的直连凭据；没有就返回 null，调用方应退回 Worker 转发 */
+export function getDirectCredentialsFor(protocol: DirectProtocol): DirectChannelCredentials | null {
+  const all = getDirectCredentials()
+  const channel = all?.[protocol]
+  if (!channel?.baseUrl?.trim() || !channel?.apiKey?.trim()) return null
+  return {
+    baseUrl: channel.baseUrl.trim(),
+    apiKey: channel.apiKey.trim(),
+    authHeader: channel.authHeader === 'apikey' ? 'apikey' : 'bearer',
+  }
+}
+
 const DIRECT_FLAG_KEY = 'gpt-image-direct-enabled'
 
 function readDirectFlag() {
@@ -203,40 +225,70 @@ export function getDirectCredentials(): DirectCredentials | null {
   try {
     const raw = localStorage.getItem(DIRECT_STORAGE_KEY)
     if (!raw) return null
-    const record = JSON.parse(raw) as Partial<DirectCredentials>
-    if (typeof record.baseUrl !== 'string' || !record.baseUrl.trim()) return null
-    if (typeof record.apiKey !== 'string' || !record.apiKey.trim()) return null
-    return {
-      protocol: record.protocol === 'agnes' || record.protocol === 'secret' ? record.protocol : 'openai',
-      baseUrl: record.baseUrl.trim(),
-      apiKey: record.apiKey.trim(),
-      authHeader: record.authHeader === 'apikey' ? 'apikey' : 'bearer',
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object') return null
+    const record = parsed as Record<string, unknown>
+
+    // 兼容旧版单渠道格式：{ protocol, baseUrl, apiKey, authHeader }
+    if (typeof record.baseUrl === 'string' && typeof record.apiKey === 'string') {
+      const protocol: DirectProtocol = record.protocol === 'agnes' || record.protocol === 'secret' ? record.protocol : 'openai'
+      return {
+        [protocol]: {
+          baseUrl: record.baseUrl,
+          apiKey: record.apiKey,
+          authHeader: record.authHeader === 'apikey' ? 'apikey' : 'bearer',
+        },
+      }
     }
+
+    const result: DirectCredentials = {}
+    for (const key of ['openai', 'agnes', 'secret'] as const) {
+      const channel = record[key]
+      if (!channel || typeof channel !== 'object') continue
+      const entry = channel as Record<string, unknown>
+      if (typeof entry.baseUrl !== 'string' || !entry.baseUrl.trim()) continue
+      if (typeof entry.apiKey !== 'string' || !entry.apiKey.trim()) continue
+      result[key] = {
+        baseUrl: entry.baseUrl.trim(),
+        apiKey: entry.apiKey.trim(),
+        authHeader: entry.authHeader === 'apikey' ? 'apikey' : 'bearer',
+      }
+    }
+    return Object.keys(result).length ? result : null
   } catch {
     return null
   }
 }
 
-/** 输入直连密码，验证通过后把上游凭据保存在本机，并返回它 */
-export async function unlockDirectAccess(password: string, protocol: 'openai' | 'agnes' | 'secret' = 'openai') {
+/** 输入直连密码，验证通过后把各渠道凭据保存在本机，并返回它 */
+export async function unlockDirectAccess(password: string) {
   const response = await fetch(DIRECT_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password, protocol }),
+    body: JSON.stringify({ password }),
     cache: 'no-store',
   })
-  const payload = await response.json().catch(() => ({})) as Partial<DirectCredentials> & { ok?: boolean; error?: { message?: string } }
+  const payload = await response.json().catch(() => ({})) as { ok?: boolean; channels?: unknown; error?: { message?: string } }
   if (!response.ok || !payload.ok) {
     throw new Error(payload.error?.message || `验证失败（HTTP ${response.status}）`)
   }
-  if (!payload.baseUrl || !payload.apiKey) throw new Error('部署端没有返回可用的上游凭据')
 
-  const credentials: DirectCredentials = {
-    protocol: payload.protocol === 'agnes' || payload.protocol === 'secret' ? payload.protocol : 'openai',
-    baseUrl: payload.baseUrl,
-    apiKey: payload.apiKey,
-    authHeader: payload.authHeader === 'apikey' ? 'apikey' : 'bearer',
+  const record = (payload.channels && typeof payload.channels === 'object' ? payload.channels : {}) as Record<string, unknown>
+  const credentials: DirectCredentials = {}
+  for (const key of ['openai', 'agnes', 'secret'] as const) {
+    const channel = record[key]
+    if (!channel || typeof channel !== 'object') continue
+    const entry = channel as Record<string, unknown>
+    if (typeof entry.baseUrl !== 'string' || !entry.baseUrl.trim()) continue
+    if (typeof entry.apiKey !== 'string' || !entry.apiKey.trim()) continue
+    credentials[key] = {
+      baseUrl: entry.baseUrl.trim(),
+      apiKey: entry.apiKey.trim(),
+      authHeader: entry.authHeader === 'apikey' ? 'apikey' : 'bearer',
+    }
   }
+  if (!Object.keys(credentials).length) throw new Error('部署端没有返回可用的上游凭据')
+
   writeStorage(DIRECT_STORAGE_KEY, JSON.stringify(credentials))
   return credentials
 }

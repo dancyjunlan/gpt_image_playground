@@ -5,6 +5,8 @@ import {
   SERVICE_MANAGED_API_KEY,
   createServerPresetConfig,
   getDirectCredentials,
+  getDirectCredentialsFor,
+  getServerProfileProtocol,
   isDirectModeEnabled,
   isServerManagedKey,
   lockDirectAccess,
@@ -86,20 +88,27 @@ describe('serverMode', () => {
     const originalFetch = globalThis.fetch
     globalThis.fetch = (() => Promise.resolve(new Response(JSON.stringify({
       ok: true,
-      protocol: 'openai',
-      baseUrl: 'https://upstream.example.com/v1',
-      apiKey: 'sk-direct',
-      authHeader: 'bearer',
+      channels: {
+        openai: { baseUrl: 'https://upstream.example.com/v1', apiKey: 'sk-openai', authHeader: 'bearer' },
+        secret: { baseUrl: 'https://secret.example.com/v1', apiKey: 'sk-secret', authHeader: 'bearer' },
+      },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))) as typeof fetch
     try {
-      const credentials = await unlockDirectAccess('pass', 'openai')
-      expect(credentials).toEqual({
-        protocol: 'openai',
+      const credentials = await unlockDirectAccess('pass')
+      expect(credentials.openai).toEqual({
         baseUrl: 'https://upstream.example.com/v1',
-        apiKey: 'sk-direct',
+        apiKey: 'sk-openai',
         authHeader: 'bearer',
       })
-      expect(getDirectCredentials()?.apiKey).toBe('sk-direct')
+
+      // 不同渠道各自取自己的地址，切换渠道时直连目标跟着变
+      expect(getDirectCredentialsFor('openai')?.baseUrl).toBe('https://upstream.example.com/v1')
+      expect(getDirectCredentialsFor('secret')?.baseUrl).toBe('https://secret.example.com/v1')
+      // 没解锁的渠道取不到凭据，调用方应退回 Worker
+      expect(getDirectCredentialsFor('agnes')).toBeNull()
+      expect(getServerProfileProtocol('default-agnes')).toBe('agnes')
+      expect(getServerProfileProtocol('default-secret')).toBe('secret')
+      expect(getServerProfileProtocol('default-openai')).toBe('openai')
 
       // 直连不再依赖额外配置项，而是由开关控制
       expect(isDirectModeEnabled()).toBe(false)

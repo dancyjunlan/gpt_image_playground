@@ -6,7 +6,7 @@ import { customProviderSupportsNativeTransparentBackground } from '../lib/custom
 import { hasActiveDataOperations, trackDataTransfer } from '../lib/dataOperations'
 import { useSettingsDataTransfer } from '../lib/dataProgress'
 import { isApiProxyAvailable, isApiProxyLocked, readClientDevProxyConfig } from '../lib/devProxy'
-import { isServerMode, isDirectAccessAvailable, getDirectCredentials, unlockDirectAccess, lockDirectAccess, isDirectModeEnabled, setDirectModeEnabled, isAgnesServerProfile, isSecretServerProfile } from '../lib/serverMode'
+import { isServerMode, isDirectAccessAvailable, getDirectCredentials, getDirectCredentialsFor, getServerProfileProtocol, unlockDirectAccess, lockDirectAccess, isDirectModeEnabled, setDirectModeEnabled } from '../lib/serverMode'
 import { isTauri } from '../lib/platform'
 import { useStore, exportData, importData, clearData, type SettingsTab } from '../store'
 import {
@@ -260,6 +260,9 @@ export default function SettingsModal() {
   const activeCustomProviderAsync = isAsyncCustomProvider(activeCustomProvider)
   const apiProxyChecked = activeProfileApiProxyEligible && (apiProxyLocked || activeProfile.apiProxy)
   const apiProxyEnabled = apiProxyAvailable && activeProfileApiProxyEligible && apiProxyChecked
+  // 当前选中的渠道是否支持直连、是否已经解锁
+  const directProtocol = getServerProfileProtocol(activeProfile.id)
+  const directChannelReady = directProtocol !== 'agnes' && Boolean(getDirectCredentialsFor(directProtocol))
   const defaultProviderOrder = ['openai', 'sb2api-async', 'fal', ...draft.customProviders.map(p => p.id)]
   const providerOrder = draft.providerOrder || defaultProviderOrder
 
@@ -444,11 +447,8 @@ export default function SettingsModal() {
     setDirectBusy(true)
     setDirectError('')
     try {
-      // 直连哪一套渠道，跟随当前选中的预置配置
-      const protocol = isAgnesServerProfile(activeProfile.id)
-        ? 'agnes'
-        : isSecretServerProfile(activeProfile.id) ? 'secret' : 'openai'
-      await unlockDirectAccess(directPassword.trim(), protocol)
+      // 一次解锁全部已配置渠道，之后切换渠道时直连地址自动跟着变
+      await unlockDirectAccess(directPassword.trim())
       setDirectPassword('')
       // 解锁后直接打开直连开关，不再依赖切换配置
       setDirectModeEnabled(true)
@@ -1566,9 +1566,13 @@ export default function SettingsModal() {
                         </button>
                       </div>
                       <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                        {directOn
-                          ? '直连已启用：请求由浏览器直接发往上游，不经过 Worker，生成期间请勿关闭页面。'
-                          : '直连已关闭：请求仍经 Worker 转发。参考图多、容易 524 时可打开。'}
+                        {directProtocol === 'agnes'
+                          ? '当前是 Agnes 渠道：它依赖 Worker 改写请求体，始终经 Worker 转发，不吃直连开关。'
+                          : !directChannelReady
+                            ? '当前渠道没有直连凭据，仍经 Worker 转发。请重新输入密码解锁。'
+                            : directOn
+                              ? `直连已启用：请求由浏览器直接发往 ${activeProfile.name} 对应上游，不经过 Worker，生成期间请勿关闭页面。切换渠道会自动换成该渠道的地址。`
+                              : '直连已关闭：请求仍经 Worker 转发。参考图多、容易 524 时可打开。'}
                       </div>
                       <button
                         type="button"
